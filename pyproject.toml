@@ -1,0 +1,24 @@
+[project]
+name = "aunp-graph-pattern-analysis"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "altair",
+    "numpy",
+    "torch",
+    "starfile",
+    "pymeshlab",
+    "rustworkx",
+    "roma",
+    "einops",
+    "scikit-learn",
+    "plotly",
+    "marimo",
+    "matplotlib",
+    "pandas",
+    "mrcfile",
+    "scipy",
+    "findingampa @ file:///${PROJECT_ROOT}/../findingampa",
+]

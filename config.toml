@@ -1,0 +1,47 @@
+# Configuration file for AUNP Graph Pattern Analysis
+
+[analysis]
+
+# Base paths
+basefolder = "/scratch/pompeii/elferich/gouaux_tomo/graph/graph/"
+output_folder = "./output"
+
+# Tomograms to analyze
+# Format: [[tomogram_folder, active_zone_id], ...]
+tomos = [
+    ["20231026_HippAu_14", "0"],
+    ["20231026_HippAu_26", "0"],
+    ["20240111_WaffleHipp_116", "0"],
+    ["20240111_WaffleHipp_133", "0"],
+    ["20240111_WaffleHipp_154", "0"],
+    ["20240624_HippWaffle_21", "0"],
+    ["20240624_HippWaffle_86", "0"],
+    ["20241030_AMmilled12-1_15", "0"],
+]
+
+# Graph construction parameters
+kdt_max_distance = 11.0  # Maximum distance for KD-tree query (nm)
+kdt_min_distance = 0.0   # Minimum distance filter (nm)
+subgraph_size = 4        # Size of connected subgraphs to find
+
+# Alignment parameters
+rmsd_max_value = 5.0     # Maximum RMSD for visualization
+
+# Embedding parameters
+tsne_perplexity = 20
+tsne_n_components = 2
+pca_n_components = 2
+
+# Test shape (optional)
+include_test_shape = true
+test_shape_coordinates = [
+    [0.0, 0.0, 0.0],
+    [9.0, 0.0, 0.0],
+    [18.0, 0.0, 0.0],
+    [27.0, 0.0, 0.0],
+]
+
+# Diagnostic options
+generate_diagnostics = true
+diagnostics_folder = "./diagnostics"
+n_subgraphs_to_highlight = 5  # Number of subgraphs to highlight in diagnostic plots
