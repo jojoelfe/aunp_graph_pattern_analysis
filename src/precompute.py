@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from config import AnalysisConfig
 from data_loading import (
     load_all_coordinates,
+    load_membrane_mesh,
     save_precomputed_data,
     load_precomputed_data,
 )
@@ -44,7 +45,7 @@ def setup_logging(verbose: bool = False):
     )
 
 
-def save_metadata(config: AnalysisConfig, tomo_pack_info: list, tomo_names: list):
+def save_metadata(config: AnalysisConfig, tomo_pack_info: list, tomo_names: list, comp_sizes=None):
     """Save metadata about the computation."""
     metadata = {
         "tomos": config.tomos,
@@ -55,6 +56,8 @@ def save_metadata(config: AnalysisConfig, tomo_pack_info: list, tomo_names: list
         "tomo_pack_info": [list(t) for t in tomo_pack_info],
         "include_test_shape": config.include_test_shape,
     }
+    if comp_sizes is not None:
+        metadata["component_sizes"] = [int(s) for s in comp_sizes]
 
     metadata_path = config.get_precomputed_path("metadata.json")
     with open(metadata_path, 'w') as f:
@@ -91,17 +94,33 @@ def run_subgraph_stage(config: AnalysisConfig, force: bool = False) -> bool:
     coordinate_list, tomo_names = load_all_coordinates(config)
     logger.info(f"Loaded coordinates from {len(coordinate_list)} tomograms")
 
+    # Load membrane meshes for normal-constrained alignment
+    membrane_data = []
+    for tomo in config.tomos:
+        glb_path = config.get_membrane_glb_path(tomo)
+        logger.info(f"Loading membrane mesh from {glb_path}")
+        positions, normals = load_membrane_mesh(glb_path)
+        membrane_data.append((positions, normals))
+
     # Build graphs and extract subgraphs
     logger.info("Building graphs and extracting subgraphs...")
-    subgraphs_tensor, tomo_pack_info, graph_metadata = process_tomogram_graphs(
-        coordinate_list, config, return_graphs=config.generate_diagnostics
+    subgraphs_tensor, tomo_pack_info, graph_metadata, original_subgraphs, comp_sizes = process_tomogram_graphs(
+        coordinate_list, config,
+        return_graphs=config.generate_diagnostics,
+        membrane_data=membrane_data,
     )
 
-    # Save subgraphs
+    # Save subgraphs (membrane-aligned for RMSD computation)
     save_precomputed_data(subgraphs_path, subgraphs_tensor)
 
-    # Save metadata
-    save_metadata(config, tomo_pack_info, tomo_names)
+    # Save original (tomogram-frame) subgraphs for overlay visualization
+    save_precomputed_data(
+        config.get_precomputed_path("subgraphs_original.pt"),
+        original_subgraphs
+    )
+
+    # Save metadata (include component sizes as list for JSON serialization)
+    save_metadata(config, tomo_pack_info, tomo_names, comp_sizes)
 
     # Generate diagnostic plots
     if config.generate_diagnostics and graph_metadata:
@@ -193,18 +212,14 @@ def run_rmsd_stage(config: AnalysisConfig, force: bool = False) -> bool:
     # Load subgraphs
     subgraphs_tensor = load_precomputed_data(subgraphs_path)
 
-    # Compute RMSD matrix
-    best_rmsd, best_indices, aligned_coords = compute_rmsd_matrix(subgraphs_tensor)
+    # Compute RMSD matrix (chunked to limit memory)
+    best_rmsd, best_indices = compute_rmsd_matrix(subgraphs_tensor)
 
     # Save results
     save_precomputed_data(rmsd_path, best_rmsd)
     save_precomputed_data(
         config.get_precomputed_path("best_indices.pt"),
         best_indices
-    )
-    save_precomputed_data(
-        config.get_precomputed_path("aligned_coords.pt"),
-        aligned_coords
     )
 
     # Save centered coordinates

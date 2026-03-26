@@ -82,10 +82,16 @@ uv run marimo run src/marimo_embedding_app.py
 ```
 
 The app will load the precomputed data and provide interactive visualizations:
-- t-SNE/PCA embeddings
-- RMSD heatmap
-- 3D average structure plots
-- Tomogram overlays
+
+**Features:**
+- **Embedding method selection**: Choose between t-SNE or PCA
+- **Interactive parameter tuning**: Adjust t-SNE perplexity on the fly
+- **Clickable scatter plot**: Select subgraphs to visualize
+- **3D average structure**: See aligned structures for selected subgraphs
+- **RMSD heatmap**: View the full pairwise distance matrix
+- **Tomogram overlay**: View selected subgraphs in their original tomogram context
+
+The app loads data instantly (no computation needed) and only computes embeddings on demand.
 
 ## Project Structure
 
