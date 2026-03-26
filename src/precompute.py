@@ -31,7 +31,7 @@ from data_loading import (
     load_precomputed_data,
 )
 from graph_construction import process_tomogram_graphs
-from alignment import compute_rmsd_matrix, center_coordinates
+from alignment import compute_rmsd_matrix, center_coordinates, compute_pairwise_features
 from visualization import plot_graph_diagnostics, create_summary_figure, create_component_size_distribution
 
 
@@ -177,9 +177,69 @@ def run_subgraph_stage(config: AnalysisConfig, force: bool = False) -> bool:
     return True
 
 
+def run_features_stage(config: AnalysisConfig, force: bool = False) -> bool:
+    """
+    Stage 2: Compute pairwise distance feature vectors.
+
+    Much faster than the RMSD matrix — no permutation search or alignment needed.
+
+    Args:
+        config: Analysis configuration
+        force: Force recomputation even if files exist
+
+    Returns:
+        True if successful
+    """
+    logger = logging.getLogger(__name__)
+
+    import numpy as np
+
+    features_path = config.get_precomputed_path("features.npy")
+    if features_path.exists() and not force:
+        logger.warning(f"Features already computed at {features_path}")
+        logger.warning("Use --force to recompute")
+        return False
+
+    subgraphs_path = config.get_precomputed_path("subgraphs.pt")
+    if not subgraphs_path.exists():
+        logger.error(f"Subgraphs not found at {subgraphs_path}")
+        logger.error("Run with --stage subgraphs first")
+        return False
+
+    logger.info("\n" + "=" * 60)
+    logger.info("STAGE 2: Computing pairwise distance features")
+    logger.info("=" * 60)
+
+    subgraphs_tensor = load_precomputed_data(subgraphs_path)
+
+    # Compute pairwise features (fast — no alignment needed)
+    features, feature_names = compute_pairwise_features(subgraphs_tensor)
+
+    # Save features and names
+    np.save(features_path, features)
+    with open(config.get_precomputed_path("feature_names.json"), 'w') as f:
+        json.dump(feature_names, f)
+
+    # Also save centered coordinates (still needed for 3D visualization)
+    centered = center_coordinates(subgraphs_tensor)
+    save_precomputed_data(
+        config.get_precomputed_path("centered_coords.pt"),
+        centered
+    )
+
+    logger.info(f"Features shape: {features.shape}")
+    logger.info(f"Feature names: {feature_names}")
+    logger.info("\n" + "=" * 60)
+    logger.info("✓ Feature computation complete!")
+    logger.info("=" * 60)
+    logger.info(f"Results saved to: {config.output_folder}")
+
+    return True
+
+
 def run_rmsd_stage(config: AnalysisConfig, force: bool = False) -> bool:
     """
-    Stage 2: Compute RMSD matrix.
+    Stage 3 (optional): Compute RMSD matrix for alignment visualization.
 
     Args:
         config: Analysis configuration
@@ -205,9 +265,9 @@ def run_rmsd_stage(config: AnalysisConfig, force: bool = False) -> bool:
         return False
 
     logger.info("\n" + "=" * 60)
-    logger.info("STAGE 2: Computing RMSD matrix")
+    logger.info("STAGE 3: Computing RMSD matrix (optional, for alignment viz)")
     logger.info("=" * 60)
-    logger.info("⚠️  This is computationally expensive and may take several minutes")
+    logger.info("This is computationally expensive and may take several minutes")
 
     # Load subgraphs
     subgraphs_tensor = load_precomputed_data(subgraphs_path)
@@ -222,12 +282,11 @@ def run_rmsd_stage(config: AnalysisConfig, force: bool = False) -> bool:
         best_indices
     )
 
-    # Save centered coordinates
-    centered = center_coordinates(subgraphs_tensor)
-    save_precomputed_data(
-        config.get_precomputed_path("centered_coords.pt"),
-        centered
-    )
+    # Save centered coordinates (if not already saved by features stage)
+    centered_path = config.get_precomputed_path("centered_coords.pt")
+    if not centered_path.exists():
+        centered = center_coordinates(subgraphs_tensor)
+        save_precomputed_data(centered_path, centered)
 
     logger.info("\n" + "=" * 60)
     logger.info("✓ RMSD computation complete!")
@@ -264,9 +323,9 @@ Examples:
     )
     parser.add_argument(
         "--stage",
-        choices=["subgraphs", "rmsd", "all"],
+        choices=["subgraphs", "features", "rmsd", "all"],
         default="all",
-        help="Which stage to run (default: all)"
+        help="Which stage to run (default: all = subgraphs + features)"
     )
     parser.add_argument(
         "--output-dir",
@@ -323,12 +382,18 @@ Examples:
             logger.info("Skipping subgraph stage (already completed)")
             success = True
 
-    if args.stage in ["rmsd", "all"]:
-        if success or args.stage == "rmsd":
-            success = run_rmsd_stage(config, args.force)
+    if args.stage in ["features", "all"]:
+        if success or args.stage == "features":
+            success = run_features_stage(config, args.force)
             if not success and not args.force:
-                logger.info("Skipping RMSD stage (already completed)")
+                logger.info("Skipping features stage (already completed)")
                 success = True
+
+    if args.stage == "rmsd":
+        success = run_rmsd_stage(config, args.force)
+        if not success and not args.force:
+            logger.info("Skipping RMSD stage (already completed)")
+            success = True
 
     # Final message
     if success or not args.force:

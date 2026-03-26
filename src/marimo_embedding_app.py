@@ -54,24 +54,40 @@ def _(mo, Path, os):
         subgraphs = load_precomputed_data(config.get_precomputed_path("subgraphs.pt"))
         subgraphs_original = load_precomputed_data(config.get_precomputed_path("subgraphs_original.pt"))
         centered_coords = load_precomputed_data(config.get_precomputed_path("centered_coords.pt"))
-        best_rmsd = load_precomputed_data(config.get_precomputed_path("rmsd_matrix.pt"))
-        best_indices = load_precomputed_data(config.get_precomputed_path("best_indices.pt"))
+
+        # Load pairwise distance features
+        features = np.load(config.get_precomputed_path("features.npy"))
+        with open(config.get_precomputed_path("feature_names.json")) as f:
+            feature_names = json.load(f)
+
+        # Load RMSD data if available (optional, for alignment viz)
+        _rmsd_path = config.get_precomputed_path("rmsd_matrix.pt")
+        _indices_path = config.get_precomputed_path("best_indices.pt")
+        if _rmsd_path.exists() and _indices_path.exists():
+            best_rmsd = load_precomputed_data(_rmsd_path)
+            best_indices = load_precomputed_data(_indices_path)
+            _has_rmsd = True
+        else:
+            best_rmsd = None
+            best_indices = None
+            _has_rmsd = False
 
         # Load metadata
         with open(config.get_precomputed_path("metadata.json")) as f:
             metadata = json.load(f)
 
         mo.md(f"""
-        ✓ Successfully loaded precomputed data:
+        Successfully loaded precomputed data:
         - {len(subgraphs)} subgraphs
         - {len(metadata['tomo_names'])} tomograms
-        - RMSD matrix shape: {best_rmsd.shape}
+        - Features: {features.shape[1]} dimensions ({', '.join(feature_names)})
+        - RMSD alignment: {'available' if _has_rmsd else 'not computed (run --stage rmsd)'}
         """)
 
         data_loaded = True
     except FileNotFoundError as e:
         mo.md(f"""
-        ❌ **Error**: Precomputed data not found!
+        **Error**: Precomputed data not found!
 
         Please run the precomputation step first:
         ```bash
@@ -83,7 +99,8 @@ def _(mo, Path, os):
         data_loaded = False
 
     return (
-        config, subgraphs, subgraphs_original, centered_coords, best_rmsd, best_indices,
+        config, subgraphs, subgraphs_original, centered_coords,
+        features, feature_names, best_rmsd, best_indices,
         align_selection_to_reference, z_axis_procrustes, metadata, data_loaded, load_precomputed_data
     )
 
@@ -97,74 +114,12 @@ def _(mo, data_loaded):
 
 
 @app.cell
-def _(mo, np, best_rmsd, metadata):
-    """Compute embeddings with user controls."""
-
-    mo.md("## Embedding Configuration")
-
-    # User controls for embedding
-    embedding_method = mo.ui.dropdown(
-        options=["t-SNE", "PCA"],
-        value="t-SNE",
-        label="Embedding method:"
-    )
-
-    tsne_perplexity = mo.ui.slider(
-        start=5, stop=50, value=20, step=5,
-        label="t-SNE Perplexity:"
-    )
-
-    compute_button = mo.ui.button(
-        label="Compute Embedding",
-        on_click=lambda _: None
-    )
-
-    mo.hstack([embedding_method, tsne_perplexity, compute_button], justify="start")
-
-    return embedding_method, tsne_perplexity, compute_button
-
-
-@app.cell
-def _(
-    mo, np, pd, torch, best_rmsd, centered_coords, metadata,
-    embedding_method, tsne_perplexity, compute_button
-):
-    """Compute the selected embedding."""
-
-    # Trigger computation when button is clicked
-    compute_button.value
-
-    with mo.status.spinner(title="Computing embedding..."):
-        if embedding_method.value == "t-SNE":
-            from sklearn.manifold import TSNE
-
-            # Convert to numpy if needed
-            rmsd_np = best_rmsd.numpy() if isinstance(best_rmsd, torch.Tensor) else best_rmsd
-
-            tsne = TSNE(
-                n_components=2,
-                metric="precomputed",
-                init="random",
-                perplexity=tsne_perplexity.value,
-                random_state=42,
-                verbose=0
-            )
-            _embedding_coords = tsne.fit_transform(rmsd_np)
-
-        else:  # PCA
-            from sklearn.decomposition import PCA
-
-            # Flatten coordinates for PCA
-            coords_flat = centered_coords.flatten(start_dim=1).numpy()
-
-            pca = PCA(n_components=2)
-            _embedding_coords = pca.fit_transform(coords_flat)
-
-            mo.md(f"PCA explained variance: {pca.explained_variance_ratio_}")
+def _(mo, np, pd, features, feature_names, metadata):
+    """Build feature DataFrame for 3D visualization."""
 
     # Create color labels by tomogram
     _tomo_pack_info = metadata['tomo_pack_info']
-    _color = np.zeros(len(_embedding_coords))
+    _color = np.zeros(len(features))
     low = 0
     for ir, (fs,) in enumerate(_tomo_pack_info):
         fs = int(fs)
@@ -177,99 +132,289 @@ def _(
     for i in range(len(_tomo_pack_info) - len(_tomo_names)):
         _tomo_names.append(_extra_labels[i] if i < len(_extra_labels) else f"Extra {i}")
 
-    # Create embedding dataframe
     _is_decoy = np.array([_tomo_names[int(c)] == "Liquid Decoy" for c in _color])
 
-    # Mark subgraphs from exact-size components (component_size == subgraph_size)
+    # Mark subgraphs from exact-size components
     _comp_sizes = np.array(metadata.get("component_sizes", []))
     _subgraph_size = metadata.get("subgraph_size", 4)
-    _is_exact = _comp_sizes == _subgraph_size if len(_comp_sizes) == len(_embedding_coords) else np.zeros(len(_embedding_coords), dtype=bool)
+    _is_exact = _comp_sizes == _subgraph_size if len(_comp_sizes) == len(features) else np.zeros(len(features), dtype=bool)
 
-    # Compute size category for visual encoding
     _size_cat = np.where(_is_decoy, "decoy", np.where(_is_exact, "exact_size", "regular"))
 
+    # Convert features to display units (angles to degrees)
+    _feat_dict = {}
+    for _fi, _fn in enumerate(feature_names):
+        _vals = features[:, _fi]
+        if "angle" in _fn:
+            _vals = np.degrees(_vals)
+        _feat_dict[_fn] = _vals
+
     embedding = pd.DataFrame({
-        "x": _embedding_coords[:, 0],
-        "y": _embedding_coords[:, 1],
         "c": _color,
         "tomogram": [_tomo_names[int(c)] for c in _color],
         "is_decoy": _is_decoy,
         "is_exact_size": _is_exact,
-        "comp_size": _comp_sizes if len(_comp_sizes) == len(_embedding_coords) else np.zeros(len(_embedding_coords), dtype=int),
+        "comp_size": _comp_sizes if len(_comp_sizes) == len(features) else np.zeros(len(features), dtype=int),
         "size_category": _size_cat,
+        **_feat_dict,
     }).reset_index()
 
     mo.md(f"""
-    ✓ {embedding_method.value} embedding computed
+    **Feature space**: {features.shape[1]} dimensions ({', '.join(feature_names)})
 
-    Embedding shape: {embedding.shape} ({int(_is_decoy.sum())} decoys, {int((~_is_decoy).sum())} real, {int(_is_exact.sum())} exact-size-{_subgraph_size})
+    {len(embedding)} subgraphs ({int(_is_decoy.sum())} decoys, {int((~_is_decoy).sum())} real, {int(_is_exact.sum())} exact-size-{_subgraph_size})
     """)
 
-    return embedding
+    return (embedding,)
 
 
 @app.cell
-def _(alt, embedding):
-    """Create interactive scatter plot with decoys as background."""
+def _(mo, np, embedding):
+    """3D scatter plot of pair-geometry features."""
 
-    def scatter(df):
-        brush = alt.selection_interval()
+    import plotly.graph_objects as _go
 
-        return (alt.Chart(df)
-            .mark_point(filled=True)
-            .encode(
-                x=alt.X("x:Q", title="Dimension 1"),
-                y=alt.Y("y:Q", title="Dimension 2"),
-                color=alt.condition(
-                    brush,
-                    alt.Color("tomogram:N", legend=alt.Legend(title="Tomogram")),
-                    alt.value('lightgray')
-                ),
-                size=alt.Size(
-                    "size_category:N",
-                    scale=alt.Scale(domain=["decoy", "regular", "exact_size"], range=[15, 80, 160]),
-                    legend=None,
-                ),
-                opacity=alt.condition(
-                    alt.datum.is_decoy,
-                    alt.value(0.3),
-                    alt.value(0.8),
-                ),
-                shape=alt.condition(
-                    alt.datum.is_exact_size,
-                    alt.value("diamond"),
-                    alt.value("circle"),
-                ),
-                strokeWidth=alt.condition(
-                    alt.datum.is_exact_size,
-                    alt.value(2),
-                    alt.value(0),
-                ),
-                stroke=alt.condition(
-                    alt.datum.is_exact_size,
-                    alt.value("black"),
-                    alt.value("transparent"),
-                ),
-                tooltip=["index:Q", "tomogram:N", "x:Q", "y:Q", "comp_size:Q", "is_exact_size:N"]
-            ).properties(
-                width=700,
-                height=700,
-                title="Subgraph Embedding (diamonds = exact size-4 components; small gray = liquid decoys)"
-            ).add_params(brush)
-        )
+    fig = _go.Figure()
 
-    return (scatter,)
+    _decoy_mask = embedding["is_decoy"].values
+    _real_mask = ~_decoy_mask
 
+    # Decoy trace (small gray background points)
+    _dec = embedding[_decoy_mask]
+    if len(_dec) > 0:
+        fig.add_trace(_go.Scatter3d(
+            x=_dec["angle_between_axes"],
+            y=_dec["angle_of_separation"],
+            z=_dec["d_inter"],
+            mode='markers',
+            marker=dict(size=2, color='lightgray', opacity=0.2),
+            name='Liquid Decoy',
+            customdata=_dec["index"].values,
+            hovertemplate=(
+                "idx=%{customdata}<br>"
+                "angle_between=%{x:.1f}deg<br>"
+                "angle_sep=%{y:.1f}deg<br>"
+                "d_inter=%{z:.1f} nm<extra></extra>"
+            ),
+        ))
 
-@app.cell
-def _(mo, scatter, embedding):
-    """Display interactive scatter plot."""
+    # Real subgraphs, one trace per tomogram
+    for _tomo_name in sorted(embedding[_real_mask]["tomogram"].unique()):
+        _mask = _real_mask & (embedding["tomogram"] == _tomo_name)
+        _sub = embedding[_mask]
+        _is_ex = _sub["is_exact_size"].values
 
-    chart = mo.ui.altair_chart(scatter(embedding))
+        fig.add_trace(_go.Scatter3d(
+            x=_sub["angle_between_axes"],
+            y=_sub["angle_of_separation"],
+            z=_sub["d_inter"],
+            mode='markers',
+            marker=dict(
+                size=[5 if e else 3 for e in _is_ex],
+                symbol=["diamond" if e else "circle" for e in _is_ex],
+                opacity=0.8,
+            ),
+            name=_tomo_name,
+            customdata=_sub["index"].values,
+            hovertemplate=(
+                f"{_tomo_name}<br>"
+                "idx=%{customdata}<br>"
+                "angle_between=%{x:.1f}deg<br>"
+                "angle_sep=%{y:.1f}deg<br>"
+                "d_inter=%{z:.1f} nm<extra></extra>"
+            ),
+        ))
+
+    fig.update_layout(
+        scene=dict(
+            xaxis_title="Angle Between Axes (deg)",
+            yaxis_title="Angle of Separation (deg)",
+            zaxis_title="Inter-pair Distance (nm)",
+        ),
+        height=700,
+        title="3D Feature Space (diamonds = exact size-4; gray = liquid decoys)",
+        legend=dict(itemsizing='constant'),
+    )
 
     mo.vstack([
-        mo.md("## Interactive Embedding Visualization"),
-        chart
+        mo.md("## 3D Feature Space"),
+        fig
+    ])
+
+    return
+
+
+@app.cell
+def _(mo, np, embedding):
+    """2D projection scatter plots for each pair of features."""
+
+    from plotly.subplots import make_subplots as _make_subplots
+    import plotly.graph_objects as _go
+
+    _axes = [
+        ("angle_between_axes", "Angle Between Axes (deg)"),
+        ("angle_of_separation", "Angle of Separation (deg)"),
+        ("d_inter", "Inter-pair Distance (nm)"),
+    ]
+
+    # Three projections: (0,1), (0,2), (1,2)
+    _pairs = [(0, 1), (0, 2), (1, 2)]
+
+    _proj_fig = _make_subplots(
+        rows=1, cols=3,
+        subplot_titles=[f"{_axes[a][1].split('(')[0].strip()} vs {_axes[b][1].split('(')[0].strip()}" for a, b in _pairs],
+        horizontal_spacing=0.06,
+    )
+
+    _decoy_mask = embedding["is_decoy"].values
+    _real_mask = ~_decoy_mask
+    _tomo_names_sorted = sorted(embedding[_real_mask]["tomogram"].unique())
+
+    # Assign consistent colors across subplots
+    import plotly.express as _px
+    _colors = _px.colors.qualitative.Plotly
+    _tomo_color = {name: _colors[i % len(_colors)] for i, name in enumerate(_tomo_names_sorted)}
+
+    for _col_idx, (_ai, _bi) in enumerate(_pairs, start=1):
+        _xcol, _xlabel = _axes[_ai]
+        _ycol, _ylabel = _axes[_bi]
+
+        # Decoys
+        _dec = embedding[_decoy_mask]
+        if len(_dec) > 0:
+            _proj_fig.add_trace(
+                _go.Scatter(
+                    x=_dec[_xcol], y=_dec[_ycol],
+                    mode='markers',
+                    marker=dict(size=2, color='lightgray', opacity=0.2),
+                    name='Liquid Decoy',
+                    showlegend=(_col_idx == 1),
+                    legendgroup='Liquid Decoy',
+                ),
+                row=1, col=_col_idx,
+            )
+
+        # Real subgraphs per tomogram
+        for _tomo_name in _tomo_names_sorted:
+            _mask = _real_mask & (embedding["tomogram"] == _tomo_name)
+            _sub = embedding[_mask]
+            _is_ex = _sub["is_exact_size"].values
+
+            _proj_fig.add_trace(
+                _go.Scatter(
+                    x=_sub[_xcol], y=_sub[_ycol],
+                    mode='markers',
+                    marker=dict(
+                        size=[7 if e else 4 for e in _is_ex],
+                        color=_tomo_color[_tomo_name],
+                        opacity=0.7,
+                        symbol=["diamond" if e else "circle" for e in _is_ex],
+                    ),
+                    name=_tomo_name,
+                    showlegend=(_col_idx == 1),
+                    legendgroup=_tomo_name,
+                ),
+                row=1, col=_col_idx,
+            )
+
+        _proj_fig.update_xaxes(title_text=_xlabel, row=1, col=_col_idx)
+        _proj_fig.update_yaxes(title_text=_ylabel, row=1, col=_col_idx)
+
+    _proj_fig.update_layout(
+        height=450,
+        title="2D Projections",
+        legend=dict(itemsizing='constant'),
+    )
+
+    mo.vstack([
+        mo.md("## 2D Projections"),
+        _proj_fig,
+    ])
+
+    return
+
+
+@app.cell
+def _(mo, feature_names, np):
+    """Axis selection controls for 2D selection scatter."""
+
+    _labels = {
+        "angle_between_axes": "Angle Between Axes (deg)",
+        "angle_of_separation": "Angle of Separation (deg)",
+        "d_inter": "Inter-pair Distance (nm)",
+    }
+    _options = {_labels.get(fn, fn): fn for fn in feature_names}
+    _label_list = list(_options.keys())
+
+    x_axis_select = mo.ui.dropdown(
+        options=_options,
+        value=_label_list[0],
+        label="X axis:",
+    )
+    y_axis_select = mo.ui.dropdown(
+        options=_options,
+        value=_label_list[1],
+        label="Y axis:",
+    )
+
+    mo.hstack([x_axis_select, y_axis_select], justify="start")
+
+    return x_axis_select, y_axis_select
+
+
+@app.cell
+def _(alt, mo, embedding, x_axis_select, y_axis_select):
+    """2D selection scatter plot using Altair brush."""
+
+    _xcol = x_axis_select.value
+    _ycol = y_axis_select.value
+
+    _labels = {
+        "angle_between_axes": "Angle Between Axes (deg)",
+        "angle_of_separation": "Angle of Separation (deg)",
+        "d_inter": "Inter-pair Distance (nm)",
+    }
+
+    brush = alt.selection_interval()
+
+    _scatter = (alt.Chart(embedding)
+        .mark_point(filled=True)
+        .encode(
+            x=alt.X(f"{_xcol}:Q", title=_labels.get(_xcol, _xcol)),
+            y=alt.Y(f"{_ycol}:Q", title=_labels.get(_ycol, _ycol)),
+            color=alt.condition(
+                brush,
+                alt.Color("tomogram:N", legend=alt.Legend(title="Tomogram")),
+                alt.value('lightgray')
+            ),
+            size=alt.Size(
+                "size_category:N",
+                scale=alt.Scale(domain=["decoy", "regular", "exact_size"], range=[15, 80, 160]),
+                legend=None,
+            ),
+            opacity=alt.condition(
+                alt.datum.is_decoy,
+                alt.value(0.3),
+                alt.value(0.8),
+            ),
+            shape=alt.condition(
+                alt.datum.is_exact_size,
+                alt.value("diamond"),
+                alt.value("circle"),
+            ),
+            tooltip=["index:Q", "tomogram:N", "angle_between_axes:Q", "angle_of_separation:Q", "d_inter:Q", "comp_size:Q"]
+        ).properties(
+            width=600,
+            height=500,
+            title="Drag to select subgraphs (diamonds = exact size-4; small = liquid decoys)"
+        ).add_params(brush)
+    )
+
+    chart = mo.ui.altair_chart(_scatter)
+
+    mo.vstack([
+        mo.md("## Selection"),
+        chart,
     ])
 
     return (chart,)
@@ -277,10 +422,9 @@ def _(mo, scatter, embedding):
 
 @app.cell
 def _(mo, chart, embedding):
-    """Show selected points."""
+    """Extract selected points from Altair chart."""
 
     _selected_df = chart.apply_selection(embedding)
-    # Filter out decoys from selection
     selected_real = _selected_df[~_selected_df["is_decoy"]]
 
     if len(selected_real) > 0 and len(selected_real) < len(embedding[~embedding["is_decoy"]]):
@@ -290,7 +434,7 @@ def _(mo, chart, embedding):
         Indices: {list(selected_real["index"].values[:10])}{'...' if len(selected_real) > 10 else ''}
         """)
     else:
-        mo.md("*Drag a box to select subgraphs*")
+        mo.md("*Drag a box on the scatter plot to select subgraphs*")
 
     return (selected_real,)
 
@@ -299,25 +443,31 @@ def _(mo, chart, embedding):
 def _(mo, np, pd, torch, selected_real, embedding, centered_coords, align_selection_to_reference, z_axis_procrustes, best_indices):
     """3D average structure visualization for selected subgraphs."""
 
-    import plotly.express as px
-    import plotly.graph_objects as go
+    import plotly.express as _px
+    import plotly.graph_objects as _go
 
     _has_selection = len(selected_real) > 0 and len(selected_real) < len(embedding[~embedding["is_decoy"]])
+    _has_rmsd = best_indices is not None
 
     if not _has_selection:
         _output_3d = mo.vstack([
-            mo.md("## Average Structure (3D)"),
-            mo.md("*Select points in the scatter plot to see average structure*")
+            mo.md("## Selected Structures (3D)"),
+            mo.md("*Select points in the scatter plot to see structures*")
         ])
     else:
         try:
             selected = selected_real["index"].values
             reference = selected[0]
 
-            # Get aligned coordinates for selected subgraphs (computed on-the-fly)
-            aligned = align_selection_to_reference(
-                centered_coords, best_indices, reference, selected
-            )
+            if _has_rmsd:
+                # Use RMSD-based permutation alignment
+                aligned = align_selection_to_reference(
+                    centered_coords, best_indices, reference, selected
+                )
+            else:
+                # No permutation data — align directly with Z-axis rotation
+                aligned = centered_coords[selected]
+
             average = torch.mean(aligned, dim=0)
 
             # Further align to average using Z-axis-only rotation
@@ -332,17 +482,15 @@ def _(mo, np, pd, torch, selected_real, embedding, centered_coords, align_select
             })
             df['subgraph'] = df['subgraph'].astype('category')
 
-            # Create 3D scatter plot
-            _plot_fig = px.scatter_3d(
+            _plot_fig = _px.scatter_3d(
                 df, x='x', y='y', z='z',
                 color='subgraph',
-                color_discrete_sequence=px.colors.qualitative.Pastel,
+                color_discrete_sequence=_px.colors.qualitative.Pastel,
                 opacity=0.7,
-                title=f"Aligned Structures ({len(selected)} selected)"
+                title=f"{'Aligned' if _has_rmsd else 'Centered'} Structures ({len(selected)} selected)"
             )
 
-            # Add average structure
-            _plot_fig.add_trace(go.Scatter3d(
+            _plot_fig.add_trace(_go.Scatter3d(
                 x=average[:, 0],
                 y=average[:, 1],
                 z=average[:, 2],
@@ -357,12 +505,12 @@ def _(mo, np, pd, torch, selected_real, embedding, centered_coords, align_select
             )
 
             _output_3d = mo.vstack([
-                mo.md("## Average Structure (3D)"),
+                mo.md("## Selected Structures (3D)"),
                 _plot_fig
             ])
         except Exception as e:
             _output_3d = mo.vstack([
-                mo.md("## Average Structure (3D)"),
+                mo.md("## Selected Structures (3D)"),
                 mo.md(f"Error creating 3D visualization: {str(e)}")
             ])
 
@@ -370,31 +518,6 @@ def _(mo, np, pd, torch, selected_real, embedding, centered_coords, align_select
 
     return
 
-
-@app.cell
-def _(mo, plt, best_rmsd, config):
-    """RMSD heatmap visualization."""
-
-    _rmsd_fig, _rmsd_ax = plt.subplots(figsize=(10, 10))
-    _rmsd_im = _rmsd_ax.imshow(
-        best_rmsd,
-        cmap="viridis_r",
-        interpolation='nearest',
-        origin="lower",
-        vmin=0,
-        vmax=config.rmsd_max_value
-    )
-    _rmsd_ax.set_xlabel("Subgraph Index")
-    _rmsd_ax.set_ylabel("Subgraph Index")
-    _rmsd_ax.set_title("Pairwise RMSD Matrix")
-    plt.colorbar(_rmsd_im, ax=_rmsd_ax, label="RMSD (Å)")
-
-    mo.vstack([
-        mo.md("## RMSD Matrix Heatmap"),
-        _rmsd_fig
-    ])
-
-    return
 
 
 @app.cell

@@ -1,4 +1,4 @@
-"""Alignment and RMSD computation for subgraphs.
+"""Alignment and feature computation for subgraphs.
 
 Uses Z-axis-only rotation (membrane-normal-constrained alignment).
 Subgraph coordinates are expected to be in membrane-aligned frame
@@ -6,8 +6,9 @@ where Z = membrane normal direction.
 """
 
 import torch
+import numpy as np
 import einops
-from itertools import permutations
+from itertools import permutations, combinations
 from typing import Tuple
 import logging
 
@@ -215,3 +216,104 @@ def align_selection_to_reference(
         aligned_list.append(aligned.squeeze(0))
 
     return torch.stack(aligned_list)
+
+
+def _angle_between_vectors_2d(v1: np.ndarray, v2: np.ndarray) -> float:
+    """Angle between two 2D vectors, returned in [0, pi/2] (unsigned, mod 180°)."""
+    cross = v1[0] * v2[1] - v1[1] * v2[0]
+    dot = v1[0] * v2[0] + v1[1] * v2[1]
+    angle = abs(np.arctan2(cross, dot))
+    # Map to [0, pi/2] — direction doesn't matter
+    if angle > np.pi / 2:
+        angle = np.pi - angle
+    return angle
+
+
+def compute_pairwise_features(
+    subgraph_coords: torch.Tensor,
+) -> Tuple[np.ndarray, list]:
+    """
+    Compute 2D pair-geometry features for 4-AuNP subgraphs.
+
+    Projects coordinates to the XY membrane plane, finds minimum-distance
+    perfect matching (2 pairs), and computes:
+    - angle_between_axes: angle between the two pair directions (0–90°)
+    - angle_of_separation: angle of inter-pair vector vs pair 1 axis (0–90°)
+      0° = end-to-end (line), 90° = side-by-side (rectangle)
+    - d_inter: distance between pair centroids in XY (nm)
+
+    Args:
+        subgraph_coords: Tensor of shape (n_subgraphs, 4, 3)
+            in membrane-aligned frame (Z = membrane normal)
+
+    Returns:
+        Tuple of:
+            - features: numpy array (n_subgraphs, 3)
+            - feature_names: list of 3 feature name strings
+    """
+    coords = subgraph_coords.numpy()
+    n_subgraphs = coords.shape[0]
+    xy = coords[:, :, :2]  # Project to membrane plane
+
+    # All 3 possible perfect matchings of 4 points into 2 pairs
+    pairings = [
+        [(0, 1), (2, 3)],
+        [(0, 2), (1, 3)],
+        [(0, 3), (1, 2)],
+    ]
+
+    features = np.zeros((n_subgraphs, 3))
+
+    for i in range(n_subgraphs):
+        pts = xy[i]  # (4, 2)
+
+        # Find minimum-distance perfect matching in XY
+        best_cost = np.inf
+        best_pairing = pairings[0]
+        for pr in pairings:
+            cost = sum(np.linalg.norm(pts[a] - pts[b]) for a, b in pr)
+            if cost < best_cost:
+                best_cost = cost
+                best_pairing = pr
+
+        # Order pairs: pair1 = shorter intra-pair distance (canonical ordering)
+        (a1, b1), (a2, b2) = best_pairing
+        d1 = np.linalg.norm(pts[b1] - pts[a1])
+        d2 = np.linalg.norm(pts[b2] - pts[a2])
+        if d1 > d2:
+            (a1, b1), (a2, b2) = (a2, b2), (a1, b1)
+
+        # Pair axis directions
+        v1 = pts[b1] - pts[a1]
+        v2 = pts[b2] - pts[a2]
+
+        # Feature 1: angle between pair axes (0–90°)
+        if np.linalg.norm(v1) < 1e-10 or np.linalg.norm(v2) < 1e-10:
+            angle_between = 0.0
+        else:
+            angle_between = _angle_between_vectors_2d(v1, v2)
+
+        # Pair centroids and separation vector
+        c1 = (pts[a1] + pts[b1]) / 2
+        c2 = (pts[a2] + pts[b2]) / 2
+        sep = c2 - c1
+        d_inter = np.linalg.norm(sep)
+
+        # Feature 2: angle of separation vector vs pair 1 axis (0–90°)
+        if d_inter < 1e-10 or np.linalg.norm(v1) < 1e-10:
+            angle_sep = 0.0
+        else:
+            angle_sep = _angle_between_vectors_2d(sep, v1)
+
+        features[i] = [angle_between, angle_sep, d_inter]
+
+    feature_names = ["angle_between_axes", "angle_of_separation", "d_inter"]
+
+    logger.info(
+        f"Computed 3 pair-geometry features for {n_subgraphs} subgraphs "
+        f"(angle_between: {np.degrees(features[:, 0]).mean():.1f}° mean, "
+        f"angle_sep: {np.degrees(features[:, 1]).mean():.1f}° mean, "
+        f"d_inter: {features[:, 2].mean():.1f} nm mean)"
+    )
+
+    return features, feature_names
