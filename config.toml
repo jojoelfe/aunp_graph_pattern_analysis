@@ -3,20 +3,20 @@
 [analysis]
 
 # Base paths
-basefolder = "/scratch/pompeii/elferich/gouaux_tomo/graph/graph/"
-output_folder = "./output"
+basefolder = "/nrs/elferich/gouaux_tomo/15F1-H4K2Cys/TOP_TOMOS"
+output_folder = "./output_h4kcys"
 
 # Tomograms to analyze
-# Format: [[tomogram_folder, active_zone_id], ...]
+# Format: [[tomogram_folder, alignment, active_zone_id], ...]
 tomos = [
-    ["20231026_HippAu_14", "0"],
-    ["20231026_HippAu_26", "0"],
-    ["20240111_WaffleHipp_116", "0"],
-    ["20240111_WaffleHipp_133", "0"],
-    ["20240111_WaffleHipp_154", "0"],
-    ["20240624_HippWaffle_21", "0"],
-    ["20240624_HippWaffle_86", "0"],
-    ["20241030_AMmilled12-1_15", "0"],
+    ["20260130_AMmilled49-2_Position_20", "fiducial_tracking", "0"],
+    ["20260130_AMmilled49-2_Position_24", "fiducial_tracking", "0"],
+    ["20260130_AMmilled49-2_Position_32", "fiducial_tracking", "0"],
+    ["20260130_AMmilled49-2_Position_33_2", "fiducial_tracking", "0"],
+    ["20260130_AMmilled49-3_Position_4_2", "fiducial_tracking", "0"],
+    ["20260131_AMmilled49-1_Position_10_2", "patch_tracking", "0"],
+    ["20260131_AMmilled49-1_Position_28", "patch_tracking", "0"]
+
 ]
 
 # Graph construction parameters
@@ -41,7 +41,16 @@ test_shape_coordinates = [
     [27.0, 0.0, 0.0],
 ]
 
+# Decoy subgraphs from liquid model
+decoy_star_file = "/scratch/pompeii/elferich/gouaux_tomo/ProcessingJE/solid_vs_liquid_2d/data/liquid_resolved_aunp.star"
+decoy_noise_sigma = 1.0       # nm Gaussian noise applied to positions
+decoy_n_subgraphs = 2000      # Number of decoy subgraphs to include
+decoy_seed = 42
+
+# Membrane normal constraint
+membrane_type = "postsynaptic"  # "postsynaptic" or "presynaptic"
+
 # Diagnostic options
 generate_diagnostics = true
-diagnostics_folder = "./diagnostics"
+diagnostics_folder = "./diagnostics_h4kcys"
 n_subgraphs_to_highlight = 5  # Number of subgraphs to highlight in diagnostic plots
