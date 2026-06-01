@@ -294,7 +294,8 @@ def process_tomogram_graphs(
         )
 
         # Keep original coordinates before membrane alignment
-        original_tensors.append(subgraphs.clone())
+        original_subgraphs = subgraphs.clone()
+        original_tensors.append(original_subgraphs)
         comp_size_lists.append(subgraph_comp_sizes)
 
         # Transform to membrane-aligned frame if membrane data available
@@ -304,12 +305,12 @@ def process_tomogram_graphs(
 
         subgraphs_tensors.append(subgraphs)
 
-        # Store graph metadata if requested
+        # Store graph metadata if requested (use original coords for diagnostic overlay)
         if return_graphs:
             graph_metadata.append({
                 'coordinates': coords_np,
                 'graph': graph,
-                'subgraphs': subgraphs,
+                'subgraphs': original_subgraphs,
                 'n_points': len(coords_np),
                 'n_subgraphs': len(subgraphs),
                 'component_sizes': component_sizes

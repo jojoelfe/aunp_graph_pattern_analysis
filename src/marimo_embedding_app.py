@@ -145,7 +145,7 @@ def _(mo, np, pd, features, feature_names, metadata):
     _feat_dict = {}
     for _fi, _fn in enumerate(feature_names):
         _vals = features[:, _fi]
-        if "angle" in _fn:
+        if "theta" in _fn:
             _vals = np.degrees(_vals)
         _feat_dict[_fn] = _vals
 
@@ -183,18 +183,18 @@ def _(mo, np, embedding):
     _dec = embedding[_decoy_mask]
     if len(_dec) > 0:
         fig.add_trace(_go.Scatter3d(
-            x=_dec["angle_between_axes"],
-            y=_dec["angle_of_separation"],
-            z=_dec["d_inter"],
+            x=_dec["theta_rot"],
+            y=_dec["theta_cc"],
+            z=_dec["d_cc"],
             mode='markers',
             marker=dict(size=2, color='lightgray', opacity=0.2),
             name='Liquid Decoy',
             customdata=_dec["index"].values,
             hovertemplate=(
                 "idx=%{customdata}<br>"
-                "angle_between=%{x:.1f}deg<br>"
-                "angle_sep=%{y:.1f}deg<br>"
-                "d_inter=%{z:.1f} nm<extra></extra>"
+                "\u03b8<sub>rot</sub>=%{x:.1f}\u00b0<br>"
+                "\u03b8<sub>cc</sub>=%{y:.1f}\u00b0<br>"
+                "d<sub>cc</sub>=%{z:.1f} nm<extra></extra>"
             ),
         ))
 
@@ -205,9 +205,9 @@ def _(mo, np, embedding):
         _is_ex = _sub["is_exact_size"].values
 
         fig.add_trace(_go.Scatter3d(
-            x=_sub["angle_between_axes"],
-            y=_sub["angle_of_separation"],
-            z=_sub["d_inter"],
+            x=_sub["theta_rot"],
+            y=_sub["theta_cc"],
+            z=_sub["d_cc"],
             mode='markers',
             marker=dict(
                 size=[5 if e else 3 for e in _is_ex],
@@ -219,17 +219,17 @@ def _(mo, np, embedding):
             hovertemplate=(
                 f"{_tomo_name}<br>"
                 "idx=%{customdata}<br>"
-                "angle_between=%{x:.1f}deg<br>"
-                "angle_sep=%{y:.1f}deg<br>"
-                "d_inter=%{z:.1f} nm<extra></extra>"
+                "\u03b8<sub>rot</sub>=%{x:.1f}\u00b0<br>"
+                "\u03b8<sub>cc</sub>=%{y:.1f}\u00b0<br>"
+                "d<sub>cc</sub>=%{z:.1f} nm<extra></extra>"
             ),
         ))
 
     fig.update_layout(
         scene=dict(
-            xaxis_title="Angle Between Axes (deg)",
-            yaxis_title="Angle of Separation (deg)",
-            zaxis_title="Inter-pair Distance (nm)",
+            xaxis_title="\u03b8_rot (\u00b0)",
+            yaxis_title="\u03b8_cc (\u00b0)",
+            zaxis_title="d_cc (nm)",
         ),
         height=700,
         title="3D Feature Space (diamonds = exact size-4; gray = liquid decoys)",
@@ -252,18 +252,23 @@ def _(mo, np, embedding):
     import plotly.graph_objects as _go
 
     _axes = [
-        ("angle_between_axes", "Angle Between Axes (deg)"),
-        ("angle_of_separation", "Angle of Separation (deg)"),
-        ("d_inter", "Inter-pair Distance (nm)"),
+        ("d_1", "d\u2081 (nm)"),
+        ("d_2", "d\u2082 (nm)"),
+        ("d_cc", "d_cc (nm)"),
+        ("theta_rot", "\u03b8_rot (\u00b0)"),
+        ("theta_cc", "\u03b8_cc (\u00b0)"),
     ]
 
-    # Three projections: (0,1), (0,2), (1,2)
-    _pairs = [(0, 1), (0, 2), (1, 2)]
+    # All pairwise projections: 5 choose 2 = 10
+    _pairs = [(i, j) for i in range(len(_axes)) for j in range(i + 1, len(_axes))]
+    _ncols = 5
+    _nrows = 2
 
     _proj_fig = _make_subplots(
-        rows=1, cols=3,
+        rows=_nrows, cols=_ncols,
         subplot_titles=[f"{_axes[a][1].split('(')[0].strip()} vs {_axes[b][1].split('(')[0].strip()}" for a, b in _pairs],
-        horizontal_spacing=0.06,
+        horizontal_spacing=0.04,
+        vertical_spacing=0.1,
     )
 
     _decoy_mask = embedding["is_decoy"].values
@@ -275,7 +280,10 @@ def _(mo, np, embedding):
     _colors = _px.colors.qualitative.Plotly
     _tomo_color = {name: _colors[i % len(_colors)] for i, name in enumerate(_tomo_names_sorted)}
 
-    for _col_idx, (_ai, _bi) in enumerate(_pairs, start=1):
+    for _idx, (_ai, _bi) in enumerate(_pairs):
+        _row = _idx // _ncols + 1
+        _col = _idx % _ncols + 1
+        _is_first = (_idx == 0)
         _xcol, _xlabel = _axes[_ai]
         _ycol, _ylabel = _axes[_bi]
 
@@ -288,10 +296,10 @@ def _(mo, np, embedding):
                     mode='markers',
                     marker=dict(size=2, color='lightgray', opacity=0.2),
                     name='Liquid Decoy',
-                    showlegend=(_col_idx == 1),
+                    showlegend=_is_first,
                     legendgroup='Liquid Decoy',
                 ),
-                row=1, col=_col_idx,
+                row=_row, col=_col,
             )
 
         # Real subgraphs per tomogram
@@ -311,17 +319,17 @@ def _(mo, np, embedding):
                         symbol=["diamond" if e else "circle" for e in _is_ex],
                     ),
                     name=_tomo_name,
-                    showlegend=(_col_idx == 1),
+                    showlegend=_is_first,
                     legendgroup=_tomo_name,
                 ),
-                row=1, col=_col_idx,
+                row=_row, col=_col,
             )
 
-        _proj_fig.update_xaxes(title_text=_xlabel, row=1, col=_col_idx)
-        _proj_fig.update_yaxes(title_text=_ylabel, row=1, col=_col_idx)
+        _proj_fig.update_xaxes(title_text=_xlabel, row=_row, col=_col)
+        _proj_fig.update_yaxes(title_text=_ylabel, row=_row, col=_col)
 
     _proj_fig.update_layout(
-        height=450,
+        height=700,
         title="2D Projections",
         legend=dict(itemsizing='constant'),
     )
@@ -339,9 +347,11 @@ def _(mo, feature_names, np):
     """Axis selection controls for 2D selection scatter."""
 
     _labels = {
-        "angle_between_axes": "Angle Between Axes (deg)",
-        "angle_of_separation": "Angle of Separation (deg)",
-        "d_inter": "Inter-pair Distance (nm)",
+        "d_1": "d\u2081 (nm)",
+        "d_2": "d\u2082 (nm)",
+        "d_cc": "d_cc (nm)",
+        "theta_rot": "\u03b8_rot (\u00b0)",
+        "theta_cc": "\u03b8_cc (\u00b0)",
     }
     _options = {_labels.get(fn, fn): fn for fn in feature_names}
     _label_list = list(_options.keys())
@@ -402,7 +412,7 @@ def _(alt, mo, embedding, x_axis_select, y_axis_select):
                 alt.value("diamond"),
                 alt.value("circle"),
             ),
-            tooltip=["index:Q", "tomogram:N", "angle_between_axes:Q", "angle_of_separation:Q", "d_inter:Q", "comp_size:Q"]
+            tooltip=["index:Q", "tomogram:N", "d_1:Q", "d_2:Q", "d_cc:Q", "theta_rot:Q", "theta_cc:Q", "comp_size:Q"]
         ).properties(
             width=600,
             height=500,
@@ -521,7 +531,7 @@ def _(mo, np, pd, torch, selected_real, embedding, centered_coords, align_select
 
 
 @app.cell
-def _(mo, np, torch, plt, selected_real, embedding, subgraphs_original, metadata, config):
+def _(mo, np, torch, plt, selected_real, embedding, subgraphs, subgraphs_original, metadata, config):
     """Tomogram overlay visualization for selected subgraphs in all active zones."""
 
     import mrcfile
@@ -598,9 +608,14 @@ def _(mo, np, torch, plt, selected_real, embedding, subgraphs_original, metadata
                     if _s < _min_ind or _s >= _max_ind:
                         continue
 
+                    # Transform original coords to AZ pixel space for drawing
                     _coords = subgraphs_original[_s]
                     _coords_t = (_coords.numpy() - _az_meta["center"]) @ _az_meta["cs"].T
                     _coords_t += np.floor(np.array(_az_data.shape)[[2, 1, 0]] / 2)
+
+                    # Use membrane-aligned coords for matching (same as feature computation)
+                    _coords_aligned = subgraphs[_s].numpy()
+                    _xy = _coords_aligned[:, :2]
 
                     _c = rand(3)
                     _n_pts = len(_coords_t)
@@ -614,8 +629,8 @@ def _(mo, np, torch, plt, selected_real, embedding, subgraphs_original, metadata
                             '-', color=_c, linewidth=0.5, alpha=0.4
                         )
 
-                    # Find minimum-distance perfect matching (2 pairs for 4 points)
-                    # All 3 possible pairings: (01+23), (02+13), (03+12)
+                    # Find minimum-distance perfect matching using membrane-aligned XY
+                    # (consistent with compute_pairwise_features)
                     if _n_pts == 4:
                         _pairings = [
                             [(0, 1), (2, 3)],
@@ -626,13 +641,14 @@ def _(mo, np, torch, plt, selected_real, embedding, subgraphs_original, metadata
                         _best_pairs = _pairings[0]
                         for _pr in _pairings:
                             _cost = sum(
-                                np.linalg.norm(_coords_t[a] - _coords_t[b])
+                                np.linalg.norm(_xy[a] - _xy[b])
                                 for a, b in _pr
                             )
                             if _cost < _best_cost:
                                 _best_cost = _cost
                                 _best_pairs = _pr
 
+                        # Draw matched pairs on the AZ overlay
                         for _a, _b in _best_pairs:
                             _ax.plot(
                                 [_coords_t[_a, 0], _coords_t[_b, 0]],

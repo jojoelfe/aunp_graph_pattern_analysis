@@ -1,0 +1,166 @@
+#!/usr/bin/env python
+"""Generate a high-quality scatter plot of theta_rot vs theta_cc.
+
+Usage:
+    uv run python src/plot_theta_scatter.py
+    uv run python src/plot_theta_scatter.py -o figures/theta_scatter.png
+    AUNP_CONFIG=config_h4kcys.toml uv run python src/plot_theta_scatter.py
+"""
+
+import argparse
+import json
+import os
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+from config import AnalysisConfig
+
+
+plt.rcParams.update({
+    "font.family": "sans-serif",
+    "font.sans-serif": ["Nimbus Sans", "Nimbus Sans L", "DejaVu Sans"],
+    "font.weight": "bold",
+    "axes.labelweight": "bold",
+    "axes.labelsize": 15,
+    "xtick.labelsize": 13,
+    "ytick.labelsize": 13,
+})
+
+
+def load_data(config: AnalysisConfig):
+    """Load features and metadata from precomputed files."""
+    features = np.load(config.get_precomputed_path("features.npy"))
+    with open(config.get_precomputed_path("feature_names.json")) as f:
+        feature_names = json.load(f)
+    with open(config.get_precomputed_path("metadata.json")) as f:
+        metadata = json.load(f)
+    return features, feature_names, metadata
+
+
+def make_theta_scatter(features, feature_names, metadata, output_path: Path,
+                       fold: bool = False, overlay: bool = False):
+    """Create publication-quality scatter plot of theta_rot vs theta_cc."""
+    # Resolve feature indices
+    i_rot = feature_names.index("theta_rot")
+    i_cc = feature_names.index("theta_cc")
+    theta_rot = np.degrees(features[:, i_rot]).copy()
+    theta_cc = np.degrees(features[:, i_cc]).copy()
+
+    # Canonical fold: the pair-label swap symmetry maps
+    #   (theta_rot, theta_cc) -> (-theta_rot, theta_cc - theta_rot)
+    # We fold into the theta_rot >= 0 half.
+    if fold:
+        need_fold = theta_rot < 0
+        theta_cc[need_fold] = theta_cc[need_fold] - theta_rot[need_fold]
+        theta_rot[need_fold] = -theta_rot[need_fold]
+
+    # Overlay: duplicate each point with its pair-swap equivalent
+    if overlay:
+        theta_rot_swap = -theta_rot
+        theta_cc_swap = theta_cc - theta_rot
+        theta_rot = np.concatenate([theta_rot, theta_rot_swap])
+        theta_cc = np.concatenate([theta_cc, theta_cc_swap])
+
+    # Reconstruct per-subgraph tomogram assignment
+    tomo_pack_info = metadata["tomo_pack_info"]
+    tomo_names = metadata["tomo_names"].copy()
+    extra_labels = ["Test Shape", "Liquid Decoy"]
+    for i in range(len(tomo_pack_info) - len(tomo_names)):
+        tomo_names.append(extra_labels[i] if i < len(extra_labels) else f"Extra {i}")
+
+    color_idx = np.concatenate([np.full(n, i) for i, n in enumerate(tomo_pack_info)])
+    tomo_labels = np.array([tomo_names[int(c)] for c in color_idx])
+
+    # Filter out decoys and test shapes — only real tomogram subgraphs
+    skip = (tomo_labels == "Liquid Decoy") | (tomo_labels == "Test Shape")
+    real_mask = ~skip
+
+    comp_sizes = np.array(metadata.get("component_sizes", []))
+    subgraph_size = metadata.get("subgraph_size", 4)
+    if len(comp_sizes) == len(features):
+        is_exact = comp_sizes == subgraph_size
+    else:
+        is_exact = np.zeros(len(features), dtype=bool)
+
+    # Duplicate metadata arrays for overlay mode
+    if overlay:
+        tomo_labels = np.concatenate([tomo_labels, tomo_labels])
+        real_mask = np.concatenate([real_mask, real_mask])
+        is_exact = np.concatenate([is_exact, is_exact])
+
+    # --- Figure ---
+    fig, ax = plt.subplots(figsize=(3.5, 3))
+
+    # Real subgraphs per tomogram
+    unique_tomos = sorted(set(tomo_labels[real_mask]))
+    # Bold qualitative palette from Matplotlib
+    colors = plt.get_cmap("Dark2").colors
+    for ti, tname in enumerate(unique_tomos):
+        mask = real_mask & (tomo_labels == tname)
+        exact = mask & is_exact
+        regular = mask & ~is_exact
+
+        color = colors[ti % len(colors)]
+
+        if regular.any():
+            ax.scatter(theta_rot[regular], theta_cc[regular],
+                       s=15, c=[color], alpha=0.45, linewidths=0.3,
+                       edgecolors="white", marker="o", rasterized=True,
+                       label=tname, zorder=2)
+        if exact.any():
+            ax.scatter(theta_rot[exact], theta_cc[exact],
+                       s=35, c=[color], alpha=1.0, linewidths=0.5,
+                       edgecolors="white", marker="D", rasterized=True,
+                       label=f"{tname} (exact)" if not regular.any() else None,
+                       zorder=3)
+
+    ax.set_xlabel(r"$\theta_{\mathrm{rot}}$ ($\degree$)", fontsize=15, fontweight="bold")
+    ax.set_ylabel(r"$\theta_{\mathrm{cc}}$ ($\degree$)", fontsize=15, fontweight="bold")
+    if fold:
+        ax.set_xlim(-5, 185)
+        cc_min = np.floor(theta_cc[real_mask].min() / 10) * 10 - 5
+        cc_max = np.ceil(theta_cc[real_mask].max() / 10) * 10 + 5
+        ax.set_ylim(cc_min, cc_max)
+    elif overlay:
+        cc_min = np.floor(theta_cc[real_mask].min() / 10) * 10 - 5
+        cc_max = np.ceil(theta_cc[real_mask].max() / 10) * 10 + 5
+        ax.set_xlim(-185, 185)
+        ax.set_ylim(cc_min, cc_max)
+    else:
+        ax.set_xlim(-95, 95)
+        ax.set_ylim(-95, 95)
+    for spine in ax.spines.values():
+        spine.set_linewidth(2.6)
+
+    ax.tick_params(labelsize=13, width=2.6, length=8)
+    for tick_label in ax.get_xticklabels() + ax.get_yticklabels():
+        tick_label.set_fontweight("bold")
+
+    fig.tight_layout()
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    print(f"Saved {output_path}")
+    plt.close(fig)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Scatter plot of theta_rot vs theta_cc")
+    parser.add_argument("-o", "--output", default="output/theta_scatter.png",
+                        help="Output file path (default: output/theta_scatter.png)")
+    parser.add_argument("--fold", action="store_true",
+                        help="Apply canonical pair-swap fold (theta_rot >= 0)")
+    parser.add_argument("--overlay", action="store_true",
+                        help="Plot both pair-swap representations of each point")
+    args = parser.parse_args()
+
+    config_path = Path(os.environ.get("AUNP_CONFIG", "config.toml"))
+    config = AnalysisConfig.from_toml_or_default(config_path)
+
+    features, feature_names, metadata = load_data(config)
+    make_theta_scatter(features, feature_names, metadata, args.output,
+                       fold=args.fold, overlay=args.overlay)
