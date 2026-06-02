@@ -6,18 +6,12 @@
 basefolder = "/nrs/elferich/gouaux_tomo/15F1-H4K2Cys/TOP_TOMOS"
 output_folder = "./output_h4kcys"
 
-# Tomograms to analyze
-# Format: [[tomogram_folder, alignment, active_zone_id], ...]
-tomos = [
-    ["20260130_AMmilled49-2_Position_20", "fiducial_tracking", "0"],
-    ["20260130_AMmilled49-2_Position_24", "fiducial_tracking", "0"],
-    ["20260130_AMmilled49-2_Position_32", "fiducial_tracking", "0"],
-    ["20260130_AMmilled49-2_Position_33_2", "fiducial_tracking", "0"],
-    ["20260130_AMmilled49-3_Position_4_2", "fiducial_tracking", "0"],
-    ["20260131_AMmilled49-1_Position_10_2", "patch_tracking", "0"],
-    ["20260131_AMmilled49-1_Position_28", "patch_tracking", "0"]
+# Tomograms to analyze — loaded from CSV
+# CSV columns: tomoname, set, alignment_dir, aunp_active_zones
+tomogram_csv = "./inputs/tomograms_15F1-H4K2Cys_JE_subset.csv"
 
-]
+# Use manually curated star files when available (_manual_refined > _manual > plain)
+use_manual_star = true
 
 # Graph construction parameters
 kdt_max_distance = 11.0  # Maximum distance for KD-tree query (nm)

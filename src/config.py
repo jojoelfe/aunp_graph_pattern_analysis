@@ -4,6 +4,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional
 import tomllib
+import csv
 import logging
 
 logger = logging.getLogger(__name__)
@@ -17,13 +18,15 @@ class AnalysisConfig:
     basefolder: Path = Path("/scratch/pompeii/elferich/gouaux_tomo/graph/graph/")
     output_folder: Path = Path("./output")
 
-    # Tomograms to analyze (tomogram_folder, active_zone_id)
-    tomos: List[Tuple[str, str]] = field(default_factory=lambda: [
-        ("20231026_HippAu_14", "0"),
-        ("20240111_WaffleHipp_227", "0"),
-        ("20240111_WaffleHipp_96", "0"),
-        ("20240111_WaffleHipp_116", "0"),
-    ])
+    # Tomograms to analyze (tomogram_folder, alignment_dir, active_zone_id)
+    tomos: List[Tuple[str, str, str]] = field(default_factory=list)
+
+    # Optional CSV file to load tomograms from (overrides tomos list if set)
+    # CSV columns: tomoname, set, alignment_dir, aunp_active_zones
+    tomogram_csv: Optional[Path] = None
+
+    # Prefer manually curated star files when available (_manual_refined > _manual > plain)
+    use_manual_star: bool = True
 
     # Graph construction parameters
     kdt_max_distance: float = 11.0  # Maximum distance for KD-tree query
@@ -73,15 +76,43 @@ class AnalysisConfig:
             self.output_folder = Path(self.output_folder)
         if isinstance(self.diagnostics_folder, str):
             self.diagnostics_folder = Path(self.diagnostics_folder)
+        if isinstance(self.tomogram_csv, str):
+            self.tomogram_csv = Path(self.tomogram_csv)
 
-        # Convert tomos list to tuples if needed
-        if self.tomos:
+        # Load tomograms from CSV if provided (overrides tomos list)
+        if self.tomogram_csv is not None:
+            self.tomos = self._load_tomos_from_csv(self.tomogram_csv)
+        elif self.tomos:
             self.tomos = [tuple(t) if isinstance(t, list) else t for t in self.tomos]
 
         # Ensure output folder exists
         self.output_folder.mkdir(parents=True, exist_ok=True)
         if self.generate_diagnostics:
             self.diagnostics_folder.mkdir(parents=True, exist_ok=True)
+
+    def _load_tomos_from_csv(self, csv_path: Path) -> List[Tuple[str, str, str]]:
+        """Load tomogram list from CSV file.
+
+        Expected columns: tomoname, set, alignment_dir, aunp_active_zones
+        Returns list of (tomoname, alignment_dir, az_id) tuples.
+        Entries where the aunps directory does not exist are skipped with a warning.
+        """
+        if not csv_path.exists():
+            raise FileNotFoundError(f"Tomogram CSV not found: {csv_path}")
+
+        tomos = []
+        with open(csv_path, newline='') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                tomo = (row['tomoname'], row['alignment_dir'], str(row['aunp_active_zones']))
+                aunps_dir = self.basefolder / tomo[0] / tomo[1] / "aunps"
+                if not aunps_dir.exists():
+                    logger.warning(f"Skipping {tomo[0]}/{tomo[1]}: aunps directory not found at {aunps_dir}")
+                    continue
+                tomos.append(tomo)
+
+        logger.info(f"Loaded {len(tomos)} tomograms from {csv_path}")
+        return tomos
 
     @classmethod
     def from_toml(cls, toml_path: Path) -> "AnalysisConfig":
@@ -116,9 +147,11 @@ class AnalysisConfig:
             config_dict["output_folder"] = Path(config_dict["output_folder"])
         if "diagnostics_folder" in config_dict:
             config_dict["diagnostics_folder"] = Path(config_dict["diagnostics_folder"])
+        if "tomogram_csv" in config_dict:
+            config_dict["tomogram_csv"] = Path(config_dict["tomogram_csv"])
 
-        # Convert tomos list
-        if "tomos" in config_dict:
+        # Convert tomos list (only used when tomogram_csv is not set)
+        if "tomos" in config_dict and "tomogram_csv" not in config_dict:
             config_dict["tomos"] = [tuple(t) for t in config_dict["tomos"]]
 
         return cls(**config_dict)
@@ -181,10 +214,24 @@ class AnalysisConfig:
         return tomo[1]
 
     def get_aunp_star_path(self, tomo: tuple) -> Path:
-        """Get path to AUNP STAR file for a tomogram."""
+        """Get path to AUNP STAR file for a tomogram.
+
+        When use_manual_star=True, prefers manually curated files in order:
+          _manual_refined.star > _manual.star > plain .star
+        """
         tracking_folder = self._get_tracking_folder(tomo)
         az_id = self._get_az_id(tomo)
-        return tracking_folder / "aunps" / f"aunp_tm_BP_active_zone_{az_id}.star"
+        aunps_dir = tracking_folder / "aunps"
+
+        if self.use_manual_star:
+            for suffix in (f"_manual_refined", f"_manual", ""):
+                candidate = aunps_dir / f"aunp_tm_BP_active_zone_{az_id}{suffix}.star"
+                if candidate.exists():
+                    return candidate
+            # Return manual_refined path even if missing — will raise clear error downstream
+            return aunps_dir / f"aunp_tm_BP_active_zone_{az_id}_manual_refined.star"
+
+        return aunps_dir / f"aunp_tm_BP_active_zone_{az_id}.star"
 
     def get_active_zonogram_path(self, tomo: tuple) -> Path:
         """Get path to active zonogram MRC file."""
