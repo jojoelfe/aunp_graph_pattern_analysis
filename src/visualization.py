@@ -21,7 +21,8 @@ def plot_graph_diagnostics(
     active_zonogram_path: Optional[Path] = None,
     n_highlight: int = 5,
     figsize: Tuple[int, int] = (12, 10),
-    plot_type: str = "both"
+    plot_type: str = "both",
+    labeled_subgraphs: Optional[dict] = None,
 ):
     """
     Create diagnostic plot showing the active zone with graph and highlighted subgraphs.
@@ -36,6 +37,8 @@ def plot_graph_diagnostics(
         n_highlight: Number of subgraphs to highlight in color
         figsize: Figure size
         plot_type: "subgraphs", "component_size", or "both" (default: "both")
+        labeled_subgraphs: Optional dict {label_number: coords_nm (4,3)} to annotate
+            exact-size subgraphs with numbered red badges (component_size plot only)
     """
     if plot_type == "both":
         # Create both versions
@@ -44,10 +47,12 @@ def plot_graph_diagnostics(
                                active_zonogram_path, n_highlight, figsize, "subgraphs")
         _plot_single_diagnostic(coordinates, graph, subgraphs, tomogram_name,
                                output_path.parent / (output_path.stem + "_component_size.png"),
-                               active_zonogram_path, n_highlight, figsize, "component_size")
+                               active_zonogram_path, n_highlight, figsize, "component_size",
+                               labeled_subgraphs=labeled_subgraphs)
     else:
         _plot_single_diagnostic(coordinates, graph, subgraphs, tomogram_name,
-                               output_path, active_zonogram_path, n_highlight, figsize, plot_type)
+                               output_path, active_zonogram_path, n_highlight, figsize, plot_type,
+                               labeled_subgraphs=labeled_subgraphs)
 
 
 def _plot_single_diagnostic(
@@ -59,7 +64,8 @@ def _plot_single_diagnostic(
     active_zonogram_path: Optional[Path],
     n_highlight: int,
     figsize: Tuple[int, int],
-    plot_type: str
+    plot_type: str,
+    labeled_subgraphs: Optional[dict] = None,
 ):
     """
     Create a single diagnostic plot.
@@ -77,6 +83,9 @@ def _plot_single_diagnostic(
     """
     fig, ax = plt.subplots(1, 1, figsize=(12, 10))
 
+    # Will be set to a callable (nm_coords → plot_coords) if az metadata is loaded
+    nm_to_plot = None
+
     # Load and display active zonogram if available
     if active_zonogram_path and active_zonogram_path.exists():
         # Load active zonogram
@@ -88,12 +97,15 @@ def _plot_single_diagnostic(
         metadata_path = active_zonogram_path.with_suffix(".npy")
         if metadata_path.exists():
             az_metadata = np.load(metadata_path, allow_pickle=True).tolist()
-            center = az_metadata["center"]
-            cs = az_metadata["cs"]
+            az_center = az_metadata["center"]
+            az_cs = az_metadata["cs"]
+            az_offset = np.floor(np.array(az_shape)[[2, 1, 0]] / 2)
+
+            def nm_to_plot(nm_coords):
+                return (nm_coords - az_center) @ az_cs.T + az_offset
 
             # Transform coordinates to active zone coordinate system
-            coords_transformed = (coordinates - center) @ cs.T
-            coords_transformed += np.floor(np.array(az_shape)[[2, 1, 0]] / 2)
+            coords_transformed = nm_to_plot(coordinates)
 
             # Display active zone projection (min along z-axis)
             az_projection = az_data_mrc.min(dim=0)[0].numpy()
@@ -113,10 +125,7 @@ def _plot_single_diagnostic(
             # Transform subgraphs as well
             transformed_subgraphs = []
             for sg in subgraphs:
-                sg_np = sg.numpy()
-                sg_transformed = (sg_np - center) @ cs.T
-                sg_transformed += np.floor(np.array(az_shape)[[2, 1, 0]] / 2)
-                transformed_subgraphs.append(sg_transformed)
+                transformed_subgraphs.append(nm_to_plot(sg.numpy()))
 
             xlabel, ylabel = 'X (pixels)', 'Y (pixels)'
         else:
@@ -183,6 +192,18 @@ def _plot_single_diagnostic(
                    bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
                             edgecolor=info['color'], alpha=0.8),
                    zorder=10)
+
+        # Add numbered labels for specific subgraphs (from --highlight in scatter plot)
+        if labeled_subgraphs:
+            for label_num, sg_coords_nm in labeled_subgraphs.items():
+                centroid_nm = sg_coords_nm.mean(axis=0)
+                centroid_plot = nm_to_plot(centroid_nm) if nm_to_plot is not None else centroid_nm
+                ax.text(centroid_plot[0], centroid_plot[1], str(label_num),
+                        fontsize=11, ha='center', va='center',
+                        color='black', fontweight='bold',
+                        bbox=dict(boxstyle='round,pad=0.3', facecolor='red',
+                                  edgecolor='white', alpha=0.85),
+                        zorder=15)
 
     else:  # subgraphs
         # Plot all points
@@ -308,147 +329,97 @@ def create_component_size_distribution(
     count_type: str = "both"
 ):
     """
-    Create a figure showing the distribution of connected component sizes.
+    Save per-tomogram component size histograms as individual files, plus a
+    combined summary image.
+
+    Individual files are written to output_path.parent as
+    ``{tomo_name}_size_dist_{count_type}.png``.
+    The summary (combined distribution across all tomograms) is written to
+    output_path (with the usual _subgraphs / _aunps suffix when count_type="both").
 
     Args:
         all_tomo_info: List of dicts with keys: name, component_sizes
-        output_path: Path to save the figure
-        max_size: Maximum component size to show in detail (larger grouped)
-        figsize: Figure size
+        output_path: Path for the summary figure
+        max_size: Maximum component size to show in detail (larger grouped as one bar)
+        figsize: Unused (kept for API compatibility); individual plots use a fixed size
         count_type: "subgraphs", "aunps", or "both" (default: "both")
     """
     if count_type == "both":
-        # Create both versions
-        _create_single_distribution(all_tomo_info, output_path.parent / (output_path.stem + "_subgraphs.png"),
-                                   max_size, figsize, "subgraphs")
-        _create_single_distribution(all_tomo_info, output_path.parent / (output_path.stem + "_aunps.png"),
-                                   max_size, figsize, "aunps")
+        for ct in ("subgraphs", "aunps"):
+            _create_component_distribution(
+                all_tomo_info,
+                output_path.parent / (output_path.stem + f"_{ct}.png"),
+                max_size, ct,
+            )
     else:
-        _create_single_distribution(all_tomo_info, output_path, max_size, figsize, count_type)
+        _create_component_distribution(all_tomo_info, output_path, max_size, count_type)
 
 
-def _create_single_distribution(
-    all_tomo_info: List[dict],
-    output_path: Path,
-    max_size: int,
-    figsize: Tuple[int, int],
-    count_type: str
-):
-    """
-    Create a single distribution figure.
-
-    Args:
-        all_tomo_info: List of dicts with keys: name, component_sizes
-        output_path: Path to save the figure
-        max_size: Maximum component size to show in detail
-        figsize: Figure size
-        count_type: "subgraphs" or "aunps"
-    """
-    n_tomos = len(all_tomo_info)
-
-    # Create a grid of subplots
-    n_cols = 2
-    n_rows = (n_tomos + 1) // n_cols + 1  # +1 for combined plot
-
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize)
-    axes = axes.flatten()
-
-    # Plot individual tomogram distributions
-    all_component_sizes = []
-    for i, info in enumerate(all_tomo_info):
-        ax = axes[i]
-        component_sizes = info['component_sizes']
-        all_component_sizes.extend(component_sizes)
-
-        # Create histogram
-        bins = np.arange(1, max_size + 2) - 0.5
-        counts, _ = np.histogram(component_sizes, bins=bins)
-
-        x_pos = np.arange(1, max_size + 1)
-
-        if count_type == "aunps":
-            # Multiply by component size to get total AUNPs
-            y_values = counts * x_pos
-            ylabel = 'Count of AUNPs'
-
-            # Add "larger" category
-            larger_components = component_sizes[component_sizes >= max_size + 1]
-            n_larger = np.sum(larger_components) if len(larger_components) > 0 else 0
-        else:  # subgraphs
-            y_values = counts
-            ylabel = 'Count of Subgraphs'
-
-            # Add "larger" category
-            n_larger = np.sum(component_sizes >= max_size + 1)
-
-        ax.bar(x_pos, y_values, color='steelblue', alpha=0.7, edgecolor='black')
-
-        if n_larger > 0:
-            ax.bar([max_size + 1], [n_larger], color='coral', alpha=0.7,
-                  edgecolor='black', label=f'≥{max_size + 1}')
-            ax.legend(fontsize=8)
-
-        ax.set_xlabel('Component Size', fontsize=9)
-        ax.set_ylabel(ylabel, fontsize=9)
-        total_aunps = np.sum(component_sizes)
-        ax.set_title(f"{info['name']}\n({len(component_sizes)} components, {total_aunps} AUNPs)",
-                    fontsize=10, fontweight='bold')
-        ax.set_xticks(np.arange(1, max_size + 2, 2))
-        ax.grid(axis='y', alpha=0.3)
-        ax.set_xlim(0.5, max_size + 1.5)
-
-    # Combined distribution
-    ax_combined = axes[-2]
-    all_component_sizes_array = np.array(all_component_sizes)
-
+def _plot_component_hist_ax(ax, component_sizes, max_size: int, count_type: str, title: str,
+                             bar_color: str = "steelblue"):
+    """Draw a component-size histogram onto *ax*. Returns nothing."""
+    component_sizes = np.asarray(component_sizes)
     bins = np.arange(1, max_size + 2) - 0.5
-    counts, _ = np.histogram(all_component_sizes_array, bins=bins)
-
+    counts, _ = np.histogram(component_sizes, bins=bins)
     x_pos = np.arange(1, max_size + 1)
 
     if count_type == "aunps":
-        # Multiply by component size to get total AUNPs
-        y_values_combined = counts * x_pos
-        ylabel_combined = 'Count of AUNPs'
+        y_values = counts * x_pos
+        ylabel = "Count of AUNPs"
+        n_larger = int(np.sum(component_sizes[component_sizes >= max_size + 1]))
+    else:
+        y_values = counts
+        ylabel = "Count of Subgraphs"
+        n_larger = int(np.sum(component_sizes >= max_size + 1))
 
-        # Add "larger" category
-        larger_components_combined = all_component_sizes_array[all_component_sizes_array >= max_size + 1]
-        n_larger_combined = np.sum(larger_components_combined) if len(larger_components_combined) > 0 else 0
-    else:  # subgraphs
-        y_values_combined = counts
-        ylabel_combined = 'Count of Subgraphs'
+    ax.bar(x_pos, y_values, color=bar_color, alpha=0.7, edgecolor="black")
+    if n_larger > 0:
+        ax.bar([max_size + 1], [n_larger], color="coral", alpha=0.7,
+               edgecolor="black", label=f"≥{max_size + 1}")
+        ax.legend(fontsize=8)
 
-        # Add "larger" category
-        n_larger_combined = np.sum(all_component_sizes_array >= max_size + 1)
+    ax.set_xlabel("Component Size", fontsize=9)
+    ax.set_ylabel(ylabel, fontsize=9)
+    ax.set_title(title, fontsize=10, fontweight="bold")
+    ax.set_xticks(np.arange(1, max_size + 2, 2))
+    ax.grid(axis="y", alpha=0.3)
+    ax.set_xlim(0.5, max_size + 1.5)
 
-    ax_combined.bar(x_pos, y_values_combined, color='darkgreen', alpha=0.7, edgecolor='black')
 
-    if n_larger_combined > 0:
-        ax_combined.bar([max_size + 1], [n_larger_combined], color='coral', alpha=0.7,
-                       edgecolor='black', label=f'≥{max_size + 1}')
-        ax_combined.legend(fontsize=9)
+def _create_component_distribution(
+    all_tomo_info: List[dict],
+    summary_path: Path,
+    max_size: int,
+    count_type: str,
+):
+    """Save one histogram file per tomogram, then write the combined summary."""
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    all_sizes = []
 
-    ax_combined.set_xlabel('Component Size', fontsize=10)
-    ax_combined.set_ylabel(ylabel_combined, fontsize=10)
-    total_components = len(all_component_sizes)
-    total_aunps_combined = np.sum(all_component_sizes_array)
-    ax_combined.set_title(f'Combined Distribution\n({total_components} components, {total_aunps_combined} AUNPs)',
-                         fontsize=11, fontweight='bold')
-    ax_combined.set_xticks(np.arange(1, max_size + 2, 2))
-    ax_combined.grid(axis='y', alpha=0.3)
-    ax_combined.set_xlim(0.5, max_size + 1.5)
+    for info in all_tomo_info:
+        sizes = np.asarray(info["component_sizes"])
+        all_sizes.extend(sizes.tolist())
 
-    # Hide unused subplots
-    for i in range(n_tomos + 1, len(axes)):
-        axes[i].axis('off')
+        fig, ax = plt.subplots(figsize=(5, 3.5))
+        total_aunps = int(np.sum(sizes))
+        title = f"{info['name']}\n({len(sizes)} components, {total_aunps} AUNPs)"
+        _plot_component_hist_ax(ax, sizes, max_size, count_type, title)
+        plt.tight_layout()
 
+        per_tomo_path = summary_path.parent / f"{info['name']}_size_dist_{count_type}.png"
+        fig.savefig(per_tomo_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        logger.info(f"Saved {per_tomo_path}")
+
+    # Combined summary
+    all_sizes_arr = np.asarray(all_sizes)
+    fig, ax = plt.subplots(figsize=(6, 4))
     title_suffix = "(Count of AUNPs)" if count_type == "aunps" else "(Count of Subgraphs)"
-    plt.suptitle(f'Connected Component Size Distribution {title_suffix}',
-                fontsize=14, fontweight='bold', y=0.995)
+    title = (f"All tomograms combined {title_suffix}\n"
+             f"({len(all_tomo_info)} tomograms, {len(all_sizes_arr)} components, "
+             f"{int(np.sum(all_sizes_arr))} AUNPs)")
+    _plot_component_hist_ax(ax, all_sizes_arr, max_size, count_type, title, bar_color="darkgreen")
     plt.tight_layout()
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(output_path, dpi=150, bbox_inches='tight')
-    plt.close()
-
-    logger.info(f"Saved component size distribution to {output_path}")
+    fig.savefig(summary_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    logger.info(f"Saved summary {summary_path}")
