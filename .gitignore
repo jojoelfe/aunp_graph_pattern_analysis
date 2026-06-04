@@ -12,5 +12,4 @@ wheels/
 # Marimo
 __marimo__/
 
-output/
 diagnostics/

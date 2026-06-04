@@ -145,7 +145,7 @@ def make_theta_scatter(features, feature_names, metadata, output_path: Path,
             regular = mask & ~is_exact
             is_hl = tname == highlight_tomo
             color = "red" if is_hl else "#aaaaaa"
-            alpha_reg = 0.8 if is_hl else 0.3
+            alpha_reg = 0.4 if is_hl else 0.15
             zorder = 4 if is_hl else 2
 
             if regular.any():
@@ -188,7 +188,7 @@ def make_theta_scatter(features, feature_names, metadata, output_path: Path,
 
             if regular.any():
                 ax.scatter(theta_rot[regular], theta_cc[regular],
-                           s=15, c=[color], alpha=0.45, linewidths=0.3,
+                           s=15, c=[color], alpha=0.2, linewidths=0.3,
                            edgecolors="white", marker="o", rasterized=True,
                            label=tname, zorder=2)
             if exact.any():
