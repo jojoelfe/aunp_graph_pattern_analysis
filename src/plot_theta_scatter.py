@@ -234,6 +234,179 @@ def make_theta_scatter(features, feature_names, metadata, output_path: Path,
         make_highlight_component_map(config, highlight_tomo, labeled_subgraphs, map_path)
 
 
+def _build_tomo_labels(metadata):
+    """Return (tomo_labels array, real_mask, is_exact) for all subgraphs."""
+    tomo_pack_info = metadata["tomo_pack_info"]
+    tomo_names = metadata["tomo_names"].copy()
+    extra_labels = ["Test Shape", "Liquid Decoy"]
+    for i in range(len(tomo_pack_info) - len(tomo_names)):
+        tomo_names.append(extra_labels[i] if i < len(extra_labels) else f"Extra {i}")
+
+    color_idx = np.concatenate([np.full(n, i) for i, n in enumerate(tomo_pack_info)])
+    tomo_labels = np.array([tomo_names[int(c)] for c in color_idx])
+
+    skip = (tomo_labels == "Liquid Decoy") | (tomo_labels == "Test Shape")
+    real_mask = ~skip
+    return tomo_labels, real_mask, tomo_names
+
+
+def _resolve_tomo_name(tomo_names, query):
+    """Find the tomo name that contains *query* as a substring (case-insensitive)."""
+    q = query.lower()
+    matches = [n for n in tomo_names if q in n.lower()]
+    if not matches:
+        return query  # fall back to exact
+    return matches[0]
+
+
+def _ax_style(ax):
+    ax.set_xlabel(r"$\theta_{\mathrm{rot}}$ ($\degree$)", fontsize=15, fontweight="bold")
+    ax.set_ylabel(r"$\theta_{\mathrm{cc}}$ ($\degree$)", fontsize=15, fontweight="bold")
+    ax.set_xlim(-95, 95)
+    ax.set_ylim(-95, 95)
+    for spine in ax.spines.values():
+        spine.set_linewidth(2.6)
+    ax.tick_params(labelsize=13, width=2.6, length=8)
+    for tl in ax.get_xticklabels() + ax.get_yticklabels():
+        tl.set_fontweight("bold")
+
+
+def make_theta_scatter_exact4(features, feature_names, metadata, output_path: Path,
+                               highlight_tomo: str = "Position_10_3"):
+    """Black scatter of exact-4-component subgraphs; label highlight_tomo points on the side."""
+    i_rot = feature_names.index("theta_rot")
+    i_cc = feature_names.index("theta_cc")
+    theta_rot = np.degrees(features[:, i_rot])
+    theta_cc = np.degrees(features[:, i_cc])
+
+    tomo_labels, real_mask, tomo_names = _build_tomo_labels(metadata)
+    full_tomo = _resolve_tomo_name(tomo_names, highlight_tomo)
+
+    comp_sizes = np.array(metadata.get("component_sizes", []))
+    subgraph_size = metadata.get("subgraph_size", 4)
+    is_exact = (comp_sizes == subgraph_size) if len(comp_sizes) == len(features) \
+        else np.zeros(len(features), dtype=bool)
+
+    exact_real = real_mask & is_exact
+
+    fig, ax = plt.subplots(figsize=(3.5, 3))
+
+    # Which of the 4 highlight points to show and how to label them
+    # Keys are 0-based positions within the highlight set; values are display labels.
+    show_positions = {0: "2", 1: "3", 3: "4"}
+
+    hl_indices = np.where(exact_real & (tomo_labels == full_tomo))[0]
+    shown_global = [hl_indices[p] for p in show_positions if p < len(hl_indices)]
+    shown_labels = [show_positions[p] for p in show_positions if p < len(hl_indices)]
+    shown_set = set(shown_global)
+
+    # Background: all exact-real points not in the shown highlighted set
+    bg_mask = exact_real.copy()
+    for gi in shown_global:
+        bg_mask[gi] = False
+
+    ax.scatter(theta_rot[bg_mask], theta_cc[bg_mask],
+               s=35, c="black", alpha=0.4, linewidths=0,
+               marker="o", rasterized=True, zorder=2)
+
+    # Shown highlighted points: grey with black outline + side label
+    if shown_global:
+        shown_arr = np.array(shown_global)
+        ax.scatter(theta_rot[shown_arr], theta_cc[shown_arr],
+                   s=35, c="#aaaaaa", alpha=1.0, linewidths=1.2,
+                   edgecolors="black", marker="o", rasterized=True, zorder=3)
+
+        for idx, label_str in zip(shown_global, shown_labels):
+            x, y = theta_rot[idx], theta_cc[idx]
+            ax.annotate(
+                label_str,
+                xy=(x, y),
+                xytext=(x + 14, y),
+                fontsize=7,
+                ha="left",
+                va="center",
+                color="black",
+                fontweight="bold",
+                arrowprops=dict(arrowstyle="-", color="black", lw=0.7,
+                                shrinkA=3, shrinkB=2),
+                annotation_clip=False,
+                zorder=5,
+            )
+
+    _ax_style(ax)
+    fig.tight_layout()
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    print(f"Saved {output_path}")
+    plt.close(fig)
+
+
+def make_theta_scatter_all_mono(features, feature_names, metadata, output_path: Path,
+                                annotations: dict = None):
+    """Monochrome scatter of all real 4-node subgraphs, styled like sim_theta_scatter.
+
+    Args:
+        annotations: Optional dict mapping global subgraph index -> display label string.
+                     Annotated points are highlighted with a side label and leader line.
+    """
+    i_rot = feature_names.index("theta_rot")
+    i_cc = feature_names.index("theta_cc")
+    theta_rot = np.degrees(features[:, i_rot])
+    theta_cc = np.degrees(features[:, i_cc])
+
+    tomo_labels, real_mask, _ = _build_tomo_labels(metadata)
+
+    fig, ax = plt.subplots(figsize=(3.5, 3))
+
+    # Background points (exclude annotated ones so they don't double-draw)
+    bg_mask = real_mask.copy()
+    if annotations:
+        for idx in annotations:
+            if idx < len(bg_mask):
+                bg_mask[idx] = False
+
+    ax.scatter(theta_rot[bg_mask], theta_cc[bg_mask],
+               s=15, c="black", alpha=0.15, linewidths=0,
+               rasterized=True, zorder=2)
+
+    # Annotated points
+    if annotations:
+        ann_indices = sorted(annotations.keys())
+        ann_arr = np.array(ann_indices)
+        ax.scatter(theta_rot[ann_arr], theta_cc[ann_arr],
+                   s=30, c="#aaaaaa", alpha=1.0, linewidths=1.2,
+                   edgecolors="black", marker="o", rasterized=True, zorder=3)
+
+        for idx in ann_indices:
+            label_str = annotations[idx]
+            x, y = theta_rot[idx], theta_cc[idx]
+            ax.annotate(
+                label_str,
+                xy=(x, y),
+                xytext=(x + 14, y),
+                fontsize=7,
+                ha="left",
+                va="center",
+                color="black",
+                fontweight="bold",
+                arrowprops=dict(arrowstyle="-", color="black", lw=0.7,
+                                shrinkA=3, shrinkB=2),
+                annotation_clip=False,
+                zorder=5,
+            )
+
+    _ax_style(ax)
+    fig.tight_layout()
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    print(f"Saved {output_path}")
+    plt.close(fig)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Scatter plot of theta_rot vs theta_cc")
@@ -245,12 +418,39 @@ if __name__ == "__main__":
                         help="Plot both pair-swap representations of each point")
     parser.add_argument("--highlight", metavar="TOMO",
                         help="Highlight points from this tomogram in red; all others grey")
+    parser.add_argument("--exact4", action="store_true",
+                        help="Plot only exact-4-component subgraphs (black, side-labeled)")
+    parser.add_argument("--all-mono", action="store_true",
+                        help="Plot all real subgraphs monochrome (sim_theta_scatter style)")
+    parser.add_argument("--label-tomo", default="Position_10_3",
+                        help="Tomogram substring to label in --exact4 plot (default: Position_10_3)")
+    parser.add_argument("--annotate", nargs="+", metavar="IDX:LABEL",
+                        help="Annotate specific subgraphs in --all-mono plot. "
+                             "Format: IDX:LABEL (e.g. 245:1 247:2)")
     args = parser.parse_args()
 
     config_path = Path(os.environ.get("AUNP_CONFIG", "config.toml"))
     config = AnalysisConfig.from_toml_or_default(config_path)
 
     features, feature_names, metadata = load_data(config)
-    make_theta_scatter(features, feature_names, metadata, args.output,
-                       fold=args.fold, overlay=args.overlay,
-                       highlight_tomo=args.highlight, config=config)
+
+    if args.exact4:
+        stem = Path(args.output).stem
+        out = Path(args.output).parent / f"{stem}_exact4.png"
+        make_theta_scatter_exact4(features, feature_names, metadata, out,
+                                   highlight_tomo=args.label_tomo)
+    elif args.all_mono:
+        stem = Path(args.output).stem
+        out = Path(args.output).parent / f"{stem}_all_mono.png"
+        annotations = None
+        if args.annotate:
+            annotations = {}
+            for spec in args.annotate:
+                idx_str, label = spec.split(":", 1)
+                annotations[int(idx_str)] = label
+        make_theta_scatter_all_mono(features, feature_names, metadata, out,
+                                   annotations=annotations)
+    else:
+        make_theta_scatter(features, feature_names, metadata, args.output,
+                           fold=args.fold, overlay=args.overlay,
+                           highlight_tomo=args.highlight, config=config)

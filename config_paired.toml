@@ -1,0 +1,44 @@
+# Configuration for paired AuNP analysis
+# Uses known AMPA pairing from ILP-matched star file
+
+[analysis]
+
+# Base paths
+basefolder = "/nrs/elferich/gouaux_tomo/15F1-H4K2Cys/TOP_TOMOS"
+output_folder = "./output_paired"
+
+# Tomograms to analyze — needed for membrane meshes and diagnostics
+tomogram_csv = "./inputs/tomograms_15F1-H4K2Cys_JE_subset.csv"
+
+# Paired AuNP star file (single file with all tomograms, known pairing)
+paired_star_file = "./inputs/all_ampa_poses_ilp_aunp5.0-9.0nm_mem15.0-22.0nm_steric5.0nm_paired_aunps.star"
+
+# Use manually curated star files when available (not used in paired mode)
+use_manual_star = true
+
+# Graph construction parameters
+# kdt_max_distance: used to connect AMPA pairs (if any AuNP of one AMPA
+# is within this distance of any AuNP of another AMPA, they are connected)
+kdt_max_distance = 11.0  # nm
+kdt_min_distance = 0.0   # nm
+subgraph_size = 4        # Size of subgraphs (2 AMPAs × 2 AuNPs = 4)
+
+# Alignment parameters
+rmsd_max_value = 5.0
+
+# Test shape (optional)
+include_test_shape = false
+
+# Decoy subgraphs from liquid model
+decoy_star_file = "/scratch/pompeii/elferich/gouaux_tomo/ProcessingJE/solid_vs_liquid_2d/data/liquid_resolved_aunp.star"
+decoy_noise_sigma = 1.0
+decoy_n_subgraphs = 2000
+decoy_seed = 42
+
+# Membrane normal constraint
+membrane_type = "postsynaptic"
+
+# Diagnostic options
+generate_diagnostics = true
+diagnostics_folder = "./diagnostics_paired"
+n_subgraphs_to_highlight = 5

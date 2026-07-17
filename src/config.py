@@ -59,6 +59,9 @@ class AnalysisConfig:
         "rlnCoordinateX", "rlnCoordinateY", "rlnCoordinateZ"
     ])
 
+    # Paired AuNP star file (optional, for paired analysis mode)
+    paired_star_file: Optional[str] = None
+
     # Membrane normal constraint
     membrane_type: str = "postsynaptic"  # "postsynaptic" or "presynaptic"
 

@@ -14,7 +14,7 @@ tomogram_csv = "./inputs/tomograms_15F1-H4K2Cys_JE_subset.csv"
 use_manual_star = true
 
 # Graph construction parameters
-kdt_max_distance = 13.0  # Maximum distance for KD-tree query (nm)
+kdt_max_distance = 11.0  # Maximum distance for KD-tree query (nm)
 kdt_min_distance = 0.0   # Minimum distance filter (nm)
 subgraph_size = 4        # Size of connected subgraphs to find
 
