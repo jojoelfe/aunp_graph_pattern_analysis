@@ -25,15 +25,8 @@ from config import AnalysisConfig
 from graph_construction import build_proximity_graph, extract_connected_subgraphs
 
 # ---------------------------------------------------------------------------
-# Simulation defaults (matching plot_simulated_theta_scatter.py)
+# Simulation defaults
 # ---------------------------------------------------------------------------
-SIM_DATA = Path(
-    "/scratch/pompeii/elferich/gouaux_tomo/ProcessingJE/solid_vs_liquid_2d/data"
-)
-STAR_FILES = {
-    "Crystal": SIM_DATA / "crystal_aunp.star",
-    "Liquid":  SIM_DATA / "liquid_resolved_aunp.star",
-}
 NOISE_SIGMA_NM = 1.0
 NOISE_SEED = 42
 
@@ -120,7 +113,7 @@ def plot_all_mono(features, feature_names, metadata, output_path: Path,
     fig, ax = plt.subplots(figsize=(3.5, 3))
     color = plt.get_cmap("Dark2").colors[2]
     ax.scatter(theta_rot[bg_mask], theta_cc[bg_mask],
-               s=15, c=[color], alpha=0.15, linewidths=0,
+               s=25, c=[color], alpha=0.15, linewidths=0,
                rasterized=True, zorder=2)
 
     # Annotated subgraphs
@@ -194,7 +187,7 @@ def plot_sim_scatter(theta_rot, theta_cc, label: str, color, output_path: Path):
     tc_deg = np.degrees(theta_cc)
 
     fig, ax = plt.subplots(figsize=(3.5, 3))
-    ax.scatter(tr_deg, tc_deg, s=5, c=[color], alpha=0.15, linewidths=0,
+    ax.scatter(tr_deg, tc_deg, s=25, c=[color], alpha=0.15, linewidths=0,
                rasterized=True, zorder=2)
     _style_ax(ax, title=label)
     fig.tight_layout()
@@ -218,6 +211,11 @@ def main():
                         help=f"Random seed for noise (default: {NOISE_SEED})")
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR,
                         help="Output directory (default: output)")
+    parser.add_argument("--no-annotations", action="store_true",
+                        help="Disable subgraph annotations on experimental scatter")
+    parser.add_argument("--sim-n-points", type=int, default=None,
+                        help="Number of Crystal/Liquid points to keep "
+                             "(default: match the experimental point count)")
     args = parser.parse_args()
 
     out = args.output_dir
@@ -227,17 +225,29 @@ def main():
     config_path = Path(os.environ.get("AUNP_CONFIG", "config.toml"))
     config = AnalysisConfig.from_toml_or_default(config_path)
     features, feature_names, metadata = load_experimental_data(config)
-    plot_all_mono(features, feature_names, metadata, out / "theta_scatter_all_mono.svg")
+    ann = {} if args.no_annotations else None
+    plot_all_mono(features, feature_names, metadata, out / "theta_scatter_all_mono.svg",
+                  annotations=ann)
+
+    _, real_mask = _build_tomo_labels(metadata)
+    n_experimental = int(real_mask.sum())
+    n_sim_points = args.sim_n_points if args.sim_n_points is not None else n_experimental
+    print(f"\nExperimental points: {n_experimental}. "
+          f"Matching Crystal/Liquid to {n_sim_points} points.")
 
     # --- 2 & 3. Simulated scatters ---
     rng = np.random.default_rng(args.seed)
     colors = plt.get_cmap("Dark2").colors
+    star_files = {
+        "Crystal": Path(config.sim_crystal_star_file),
+        "Liquid":  Path(config.sim_liquid_star_file),
+    }
     sim_outputs = {
         "Crystal": out / "sim_crystal_scatter.svg",
         "Liquid":  out / "sim_liquid_scatter.svg",
     }
 
-    for ci, (label, star_path) in enumerate(STAR_FILES.items()):
+    for ci, (label, star_path) in enumerate(star_files.items()):
         if not star_path.exists():
             print(f"WARNING: {star_path} not found, skipping.")
             continue
@@ -246,6 +256,13 @@ def main():
                                         kdt_min_distance=config.kdt_min_distance,
                                         subgraph_size=config.subgraph_size)
         if len(tr):
+            n_keep = min(n_sim_points, len(tr))
+            if n_keep < n_sim_points:
+                print(f"  WARNING: only {len(tr)} points available, "
+                      f"fewer than requested {n_sim_points}")
+            keep_idx = rng.choice(len(tr), size=n_keep, replace=False)
+            tr, tc = tr[keep_idx], tc[keep_idx]
+            print(f"  Subsampled to {len(tr)} points")
             plot_sim_scatter(tr, tc, label, colors[ci % len(colors)], sim_outputs[label])
 
 

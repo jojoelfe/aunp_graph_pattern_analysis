@@ -19,7 +19,7 @@ use_manual_star = true
 # Graph construction parameters
 # kdt_max_distance: used to connect AMPA pairs (if any AuNP of one AMPA
 # is within this distance of any AuNP of another AMPA, they are connected)
-kdt_max_distance = 11.0  # nm
+kdt_max_distance = 12.0  # nm
 kdt_min_distance = 0.0   # nm
 subgraph_size = 4        # Size of subgraphs (2 AMPAs × 2 AuNPs = 4)
 
@@ -29,11 +29,15 @@ rmsd_max_value = 5.0
 # Test shape (optional)
 include_test_shape = false
 
-# Decoy subgraphs from liquid model
-decoy_star_file = "/scratch/pompeii/elferich/gouaux_tomo/ProcessingJE/solid_vs_liquid_2d/data/liquid_resolved_aunp.star"
-decoy_noise_sigma = 1.0
-decoy_n_subgraphs = 2000
-decoy_seed = 42
+# Simulated comparison star files
+sim_crystal_star_file = "/scratch/pompeii/elferich/gouaux_tomo/ProcessingJE/solid_vs_liquid_2d-crystal-vs-liquid-aunp/data/crystal_aunp.star"
+sim_liquid_star_file = "/scratch/pompeii/elferich/gouaux_tomo/ProcessingJE/solid_vs_liquid_2d-crystal-vs-liquid-aunp/data/liquid_resolved_aunp.star"
+
+# Decoy subgraphs from liquid model (disabled — no longer needed)
+# decoy_star_file = "/scratch/pompeii/elferich/gouaux_tomo/ProcessingJE/solid_vs_liquid_2d-crystal-vs-liquid-aunp/data/liquid_resolved_aunp.star"
+# decoy_noise_sigma = 1.0
+# decoy_n_subgraphs = 2000
+# decoy_seed = 42
 
 # Membrane normal constraint
 membrane_type = "postsynaptic"

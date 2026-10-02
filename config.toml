@@ -14,7 +14,7 @@ tomogram_csv = "./inputs/tomograms_15F1-H4K2Cys_JE_subset.csv"
 use_manual_star = true
 
 # Graph construction parameters
-kdt_max_distance = 11.0  # Maximum distance for KD-tree query (nm)
+kdt_max_distance = 12.0  # Maximum distance for KD-tree query (nm)
 kdt_min_distance = 0.0   # Minimum distance filter (nm)
 subgraph_size = 4        # Size of connected subgraphs to find
 
@@ -35,11 +35,15 @@ test_shape_coordinates = [
     [27.0, 0.0, 0.0],
 ]
 
-# Decoy subgraphs from liquid model
-decoy_star_file = "/scratch/pompeii/elferich/gouaux_tomo/ProcessingJE/solid_vs_liquid_2d/data/liquid_resolved_aunp.star"
-decoy_noise_sigma = 1.0       # nm Gaussian noise applied to positions
-decoy_n_subgraphs = 2000      # Number of decoy subgraphs to include
-decoy_seed = 42
+# Simulated comparison star files
+sim_crystal_star_file = "/scratch/pompeii/elferich/gouaux_tomo/ProcessingJE/solid_vs_liquid_2d-crystal-vs-liquid-aunp/data/crystal_aunp.star"
+sim_liquid_star_file = "/scratch/pompeii/elferich/gouaux_tomo/ProcessingJE/solid_vs_liquid_2d-crystal-vs-liquid-aunp/data/liquid_resolved_aunp.star"
+
+# Decoy subgraphs from liquid model (disabled — no longer needed)
+# decoy_star_file = "/scratch/pompeii/elferich/gouaux_tomo/ProcessingJE/solid_vs_liquid_2d-crystal-vs-liquid-aunp/data/liquid_resolved_aunp.star"
+# decoy_noise_sigma = 1.0       # nm Gaussian noise applied to positions
+# decoy_n_subgraphs = 2000      # Number of decoy subgraphs to include
+# decoy_seed = 42
 
 # Membrane normal constraint
 membrane_type = "postsynaptic"  # "postsynaptic" or "presynaptic"

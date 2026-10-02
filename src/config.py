@@ -59,6 +59,10 @@ class AnalysisConfig:
         "rlnCoordinateX", "rlnCoordinateY", "rlnCoordinateZ"
     ])
 
+    # Simulated comparison star files
+    sim_crystal_star_file: Optional[str] = None
+    sim_liquid_star_file: Optional[str] = None
+
     # Paired AuNP star file (optional, for paired analysis mode)
     paired_star_file: Optional[str] = None
 
